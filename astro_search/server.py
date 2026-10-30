@@ -40,7 +40,6 @@ RASTER_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".heic",
 ALLOWED_EXTENSIONS = RASTER_EXTENSIONS | RAW_EXTENSIONS
 JOB_ID = r"{id:[0-9a-f]{32}}"
 _dumps = functools.partial(json.dumps, ensure_ascii=False)
-STATIC_DIR = Path(__file__).parent / "static"
 
 CFG = web.AppKey("cfg", Config)
 JOBS = web.AppKey("jobs", JobManager)
@@ -209,12 +208,14 @@ async def delete_job(request: web.Request) -> web.Response:
 
 
 async def index(request: web.Request) -> web.StreamResponse:
-    page = STATIC_DIR / "index.html"
+    page = request.app[CFG].web_dir / "index.html"
     if page.is_file():
-        return web.FileResponse(page)
+        # Сторінка посилається на ресурси з хешем в імені, тож її саму не кешуємо
+        return web.FileResponse(page, headers={"Cache-Control": "no-cache"})
     return web.Response(text=(
-        "astro-search працює. Вебсторінки ще немає, API доступне за адресою /api/.\n"
-        "Почніть з GET /api/health.\n"), content_type="text/plain", charset="utf-8")
+        "astro-search працює, але вебсторінку не зібрано (немає index.html у ASTRO_WEB_DIR).\n"
+        "Зберіть її: cd frontend && npm ci && npm run build. API доступне за адресою /api/.\n"),
+        content_type="text/plain", charset="utf-8")
 
 
 # ---------------------------------------------------------------- застосунок
@@ -242,6 +243,7 @@ def create_app(cfg: Config) -> web.Application:
     app.router.add_delete(f"/api/jobs/{JOB_ID}", delete_job)
     app.router.add_get(f"/api/jobs/{JOB_ID}/preview", get_preview)
     app.router.add_get(f"/api/jobs/{JOB_ID}/original", get_original)
-    if STATIC_DIR.is_dir():
-        app.router.add_static("/static/", STATIC_DIR)
+    # Тека може з'явитися вже після старту (збірка фронтенду), тож додаємо маршрут завжди
+    cfg.web_dir.mkdir(parents=True, exist_ok=True)
+    app.router.add_static("/static/", cfg.web_dir)
     return app

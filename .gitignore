@@ -223,3 +223,6 @@ __marimo__/
 data/
 catalog/
 preview.jpg
+
+# Фронтенд
+node_modules/

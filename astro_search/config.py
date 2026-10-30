@@ -25,6 +25,8 @@ class Config:
     default_elevation_m: float
     # Скільки секунд дозволено astrometry.net на один кадр.
     astrometry_cpulimit_s: int
+    # Зібраний фронтенд (index.html + assets/). У Docker його збирає entrypoint під час запуску.
+    web_dir: Path
 
 
 def load() -> Config:
@@ -38,4 +40,5 @@ def load() -> Config:
         default_lon=_float("ASTRO_DEFAULT_LON", 24.0297),
         default_elevation_m=_float("ASTRO_DEFAULT_ELEVATION_M", 300),
         astrometry_cpulimit_s=int(os.environ.get("ASTRO_ASTROMETRY_CPULIMIT", 60)),
+        web_dir=Path(os.environ.get("ASTRO_WEB_DIR", Path(__file__).parent.parent / "frontend" / "dist")),
     )

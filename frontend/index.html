@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="uk">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>astro-search</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+  </head>
+  <body>
+    <canvas id="starfield" aria-hidden="true"></canvas>
+
+    <header class="topbar">
+      <a class="brand" href="#/">
+        <svg viewBox="0 0 32 32" aria-hidden="true"><use href="#i-logo" /></svg>
+        <span>astro<b>search</b></span>
+      </a>
+      <div id="health" class="health" aria-live="polite"></div>
+      <div class="topbar-actions">
+        <button id="btn-night" class="icon-btn" title="Нічний режим (N): червоне світло не збиває темнову адаптацію очей" aria-pressed="false">
+          <svg aria-hidden="true"><use href="#i-eye" /></svg>
+        </button>
+        <button id="btn-help" class="icon-btn" title="Клавіші (?)">
+          <svg aria-hidden="true"><use href="#i-key" /></svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <form id="upload" class="card upload" novalidate>
+          <label class="dropzone" id="dropzone">
+            <input type="file" name="file" id="file" accept=".jpg,.jpeg,.png,.tif,.tiff,.webp,.heic,.heif,.bmp,.dng,.cr2,.cr3,.nef,.arw,.raf,.orf,.rw2,.pef,.srw" />
+            <svg class="dz-icon" aria-hidden="true"><use href="#i-upload" /></svg>
+            <span class="dz-title" id="dz-title">Перетягніть фото неба</span>
+            <span class="dz-sub" id="dz-sub">або натисніть, щоб вибрати · JPG, PNG, HEIC, RAW/DNG</span>
+          </label>
+
+          <details class="extra" id="extra">
+            <summary>Час, місце, поле зору <small>(якщо в EXIF їх немає)</small></summary>
+            <div class="grid2">
+              <label class="span2">Час зйомки
+                <span class="row">
+                  <input type="datetime-local" name="time_local" step="1" />
+                  <select name="tz" title="Часовий пояс фото"></select>
+                </span>
+              </label>
+              <label>Широта, °<input type="number" name="lat" step="any" min="-90" max="90" placeholder="49.8397" /></label>
+              <label>Довгота, °<input type="number" name="lon" step="any" min="-180" max="180" placeholder="24.0297" /></label>
+              <label>Висота, м<input type="number" name="elevation_m" step="any" placeholder="300" /></label>
+              <label>Поле зору, °<input type="number" name="fov_deg" step="any" min="1" max="180" placeholder="авто" /></label>
+              <button type="button" class="btn ghost span2" id="btn-geo">
+                <svg aria-hidden="true"><use href="#i-pin" /></svg> Моє місце зараз
+              </button>
+            </div>
+            <p class="hint" id="default-loc"></p>
+          </details>
+
+          <button type="submit" class="btn primary" id="btn-send" disabled>
+            <svg aria-hidden="true"><use href="#i-telescope" /></svg> Розпізнати небо
+          </button>
+          <div class="progress" id="up-progress" hidden><i></i></div>
+          <p class="form-error" id="up-error" role="alert"></p>
+        </form>
+
+        <section class="card jobs">
+          <h2>Кадри <span id="jobs-count" class="muted"></span></h2>
+          <ul id="jobs" class="job-list"></ul>
+        </section>
+      </aside>
+
+      <main id="main" class="main"></main>
+    </div>
+
+    <div id="drop-overlay" class="drop-overlay" hidden>
+      <div><svg aria-hidden="true"><use href="#i-upload" /></svg>Відпустіть, щоб завантажити</div>
+    </div>
+
+    <dialog id="help" class="help">
+      <h2>Клавіші</h2>
+      <dl>
+        <dt>+ / −</dt><dd>наблизити / віддалити</dd>
+        <dt>0</dt><dd>показати весь кадр</dd>
+        <dt>S</dt><dd>зорі</dd>
+        <dt>P</dt><dd>планети й Місяць</dd>
+        <dt>G</dt><dd>сітка висоти й азимута</dd>
+        <dt>D</dt><dd>усі знайдені точки</dd>
+        <dt>L</dt><dd>підписи</dd>
+        <dt>/</dt><dd>пошук об'єкта</dd>
+        <dt>N</dt><dd>нічний режим</dd>
+        <dt>Esc</dt><dd>закрити картку</dd>
+      </dl>
+      <form method="dialog"><button class="btn">Зрозуміло</button></form>
+    </dialog>
+
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <symbol id="i-logo" viewBox="0 0 32 32"><circle cx="16" cy="16" r="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3 3"/><path d="M16 5l2.2 8.8L27 16l-8.8 2.2L16 27l-2.2-8.8L5 16l8.8-2.2z" fill="currentColor"/></symbol>
+      <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4m0 0l-5 5m5-5l5 5M4 17v2a1 1 0 001 1h14a1 1 0 001-1v-2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-telescope" viewBox="0 0 24 24"><path d="M3 14l14-7 2 4-14 7zM10 15l-3 6m6-7l3 7M17 7l2-1 2 4-2 1" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+      <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0119 9.5C19 14.8 12 21 12 21z" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="9.5" r="2.5" fill="currentColor"/></symbol>
+      <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="3" fill="currentColor"/></symbol>
+      <symbol id="i-key" viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M6 10h1m3 0h1m3 0h1m3 0h1M7 14h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3m-8 0l1 13h8l1-13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+      <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v12m0 0l-5-5m5 5l5-5M4 20h16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-fit" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+      <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    </svg>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
