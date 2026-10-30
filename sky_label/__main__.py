@@ -1,4 +1,4 @@
-"""Запуск сервера: python -m astro_search"""
+"""Запуск сервера: python -m sky_label"""
 
 import logging
 

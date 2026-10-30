@@ -12,7 +12,7 @@ export function welcomeScreen(doneCount: number): HTMLElement {
     h("div.orbit", { "aria-hidden": "true" }, h("i"), h("i"), h("i")),
     h("h1", {}, "Що там, на вашому небі?"),
     h("p.lead", {}, "Завантажте фото нічного неба — з телефона чи камери, хоч через вікно. ",
-      "astro-search знайде зорі, визначить, куди дивилася камера, підпише зорі, планети й Місяць і покаже, наскільки точно все збіглося."),
+      "SkyLabel знайде зорі, визначить, куди дивилася камера, підпише зорі, планети й Місяць і покаже, наскільки точно все збіглося."),
     h("button.btn.primary.cta", { onclick: pickAndUpload }, icon("upload"), "Вибрати фото"),
     h("div.features", {},
       feature("✦", "Plate solving", "tetra3rs за мілісекунди, astrometry.net як запасний варіант, уточнення TAN-SIP за каталогом HYG."),

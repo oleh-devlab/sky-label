@@ -1,7 +1,7 @@
 import numpy as np
 from conftest import H, W, make_wcs
 
-from astro_search import projection
+from sky_label import projection
 
 
 def test_world2pix_roundtrip_inside_frame(rng):

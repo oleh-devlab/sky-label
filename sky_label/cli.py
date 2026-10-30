@@ -1,7 +1,7 @@
 """Обробити одне фото без сервера:
 
-    python -m astro_search.cli photo.dng --out result.json
-    python -m astro_search.cli photo.jpg --time 2024-11-01T22:30:01+02:00 --lat 49.84 --lon 24.03
+    python -m sky_label.cli photo.dng --out result.json
+    python -m sky_label.cli photo.jpg --time 2024-11-01T22:30:01+02:00 --lat 49.84 --lon 24.03
 """
 
 from __future__ import annotations

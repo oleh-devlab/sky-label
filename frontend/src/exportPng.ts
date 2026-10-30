@@ -92,7 +92,7 @@ export async function exportAnnotatedPng(img: HTMLImageElement, r: Result,
   }
   // Підпис унизу
   const obs = r.observation;
-  const foot = ["astro-search", obs.time_utc ? new Date(obs.time_utc).toISOString().replace(".000Z", " UTC").replace("T", " ") : null,
+  const foot = ["SkyLabel", obs.time_utc ? new Date(obs.time_utc).toISOString().replace(".000Z", " UTC").replace("T", " ") : null,
     `${num(obs.location.lat, 4)}°, ${num(obs.location.lon, 4)}°`].filter(Boolean).join("  ·  ");
   label(foot, 12 * u, H - 12 * u, "rgba(226,232,240,.9)", true);
   return new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error("toBlob"))), "image/png"));

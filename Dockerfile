@@ -1,7 +1,7 @@
-# astro-search: локальний сервіс plate solving для фото нічного неба.
+# SkyLabel: локальний сервіс plate solving для фото нічного неба.
 #
-#   docker build -t astro-search .
-#   docker run --rm -p 127.0.0.1:8080:8080 -v astro-search-data:/data astro-search
+#   docker build -t sky-label .
+#   docker run --rm -p 127.0.0.1:8080:8080 -v sky-label-data:/data sky-label
 #
 # Інтернет потрібен лише під час збірки. Готовий контейнер працює офлайн.
 # Фронтенд збирається під час кожного запуску контейнера (scripts/entrypoint.sh).
@@ -44,7 +44,7 @@ RUN python scripts/prepare_data.py --out /opt/astro-catalog
 COPY --from=web /usr/local/bin/node /usr/local/bin/node
 COPY --from=web /app/frontend/ frontend/
 
-COPY astro_search/ astro_search/
+COPY sky_label/ sky_label/
 
 RUN useradd --system --uid 10001 --create-home app \
  && mkdir -p /data /app/web \
@@ -67,4 +67,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=40s \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=4)"
 
 ENTRYPOINT ["/app/scripts/entrypoint.sh"]
-CMD ["python", "-m", "astro_search"]
+CMD ["python", "-m", "sky_label"]

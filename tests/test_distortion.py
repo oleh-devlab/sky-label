@@ -1,7 +1,7 @@
 import numpy as np
 from conftest import H, W, make_wcs
 
-from astro_search import distortion, projection
+from sky_label import distortion, projection
 
 
 def sample(w, rng, n=400, noise_px=0.0):

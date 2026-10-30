@@ -219,7 +219,7 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# astro-search: локальні дані
+# SkyLabel: локальні дані
 data/
 catalog/
 preview.jpg

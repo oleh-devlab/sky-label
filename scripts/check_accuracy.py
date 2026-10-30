@@ -23,8 +23,8 @@ import numpy as np
 from astropy.wcs import WCS, Sip
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from astro_search import catalog, config, projection, solve  # noqa: E402
-from astro_search.stars import detect  # noqa: E402
+from sky_label import catalog, config, projection, solve  # noqa: E402
+from sky_label.stars import detect  # noqa: E402
 
 W, H = 3000, 4000
 EPOCH = 2025.3

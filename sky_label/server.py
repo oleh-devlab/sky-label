@@ -259,7 +259,7 @@ async def index(request: web.Request) -> web.StreamResponse:
         # Сторінка посилається на ресурси з хешем в імені, тож її саму не кешуємо
         return web.FileResponse(page, headers={"Cache-Control": "no-cache"})
     return web.Response(text=(
-        "astro-search працює, але вебсторінку не зібрано (немає index.html у ASTRO_WEB_DIR).\n"
+        "SkyLabel працює, але вебсторінку не зібрано (немає index.html у ASTRO_WEB_DIR).\n"
         "Зберіть її: cd frontend && npm ci && npm run build. API доступне за адресою /api/.\n"),
         content_type="text/plain", charset="utf-8")
 

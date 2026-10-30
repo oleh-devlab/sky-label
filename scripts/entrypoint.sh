@@ -4,7 +4,7 @@
 # Залежності фронтенду (node_modules) встановлені в образ під час docker build,
 # тож збірка під час запуску працює офлайн і триває кілька секунд.
 # Щоб правити сторінку без перезбирання образу, змонтуйте вихідний код:
-#   docker run ... -v ./frontend/src:/app/frontend/src:ro astro-search
+#   docker run ... -v ./frontend/src:/app/frontend/src:ro sky-label
 # і просто перезапустіть контейнер.
 #
 # ASTRO_WEB_BUILD=0 вимикає збірку: тоді віддається версія, зібрана під час docker build.

@@ -1,4 +1,4 @@
-// Типи й виклики HTTP API бекенда (див. astro_search/server.py і README).
+// Типи й виклики HTTP API бекенда (див. sky_label/server.py і README).
 
 export type JobStatus = "queued" | "running" | "done" | "failed";
 
@@ -173,9 +173,9 @@ export const api = {
         if (xhr.status === 202) resolve(xhr.response as Job);
         else if (xhr.response?.error) reject(new ApiError(xhr.response.error));
         else if (xhr.status === 413)
-          // Сам astro-search відповідає на завеликий файл кодом 400 з поясненням,
+          // Сам SkyLabel відповідає на завеликий файл кодом 400 з поясненням,
           // тож 413 без тіла JSON приходить від проксі перед ним (у nginx за замовчуванням 1 МБ)
-          reject(new ApiError(`Файл (${(size / 1048576).toFixed(1)} МБ) відхилив проксі перед astro-search (413). ` +
+          reject(new ApiError(`Файл (${(size / 1048576).toFixed(1)} МБ) відхилив проксі перед SkyLabel (413). ` +
             "Збільште в ньому ліміт тіла запиту, напр. для nginx: client_max_body_size 300m;"));
         else reject(new ApiError(`Помилка сервера: ${xhr.status} ${xhr.statusText}`.trim()));
       };

@@ -4,8 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from astro_search import pipeline
-from astro_search.config import Config
+from sky_label import pipeline
+from sky_label.config import Config
 
 CFG = Config(data_dir=Path("."), catalog_dir=Path("."), host="", port=0, max_upload_mb=1,
              default_lat=49.8397, default_lon=24.0297, default_elevation_m=300,

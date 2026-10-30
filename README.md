@@ -1,4 +1,4 @@
-# astro-search
+# SkyLabel
 
 > ⚠️ Увесь код у цьому репозиторії (100 %) написала LLM.
 
@@ -11,8 +11,8 @@
 ## Запуск у Docker
 
 ```bash
-docker build -t astro-search .
-docker run --rm -p 127.0.0.1:8080:8080 -v astro-search-data:/data astro-search
+docker build -t sky-label .
+docker run --rm -p 127.0.0.1:8080:8080 -v sky-label-data:/data sky-label
 ```
 
 Місце за замовчуванням (для фото без GPS, поки ви не вказали своє) — Львів. Інше задається змінними, напр. для Києва: `-e ASTRO_DEFAULT_LAT=50.4501 -e ASTRO_DEFAULT_LON=30.5234 -e ASTRO_DEFAULT_ELEVATION_M=180`.
@@ -20,15 +20,15 @@ docker run --rm -p 127.0.0.1:8080:8080 -v astro-search-data:/data astro-search
 - Сайт відкривається на `http://localhost:8080`, API — на `http://localhost:8080/api/`. Прив'язка до `127.0.0.1` означає, що з мережі до сервісу ніхто не достукається.
 - Фронтенд збирається автоматично під час кожного запуску контейнера (`scripts/entrypoint.sh`, кілька секунд). Залежності Node вже лежать в образі, тож збірка працює офлайн. Якщо вона не вдасться, віддається версія, зібрана ще під час `docker build`.
 - Інтернет потрібен лише під час збірки: вона завантажує пакети й каталог зір HYG і генерує базу tetra3rs. Готовий контейнер працює офлайн.
-- Задачі зберігаються в томі `astro-search-data`, тож переживають перезапуск контейнера.
+- Задачі зберігаються в томі `sky-label-data`, тож переживають перезапуск контейнера.
 
 ### Правка сторінки без перезбирання образу
 
 Змонтуйте вихідний код фронтенду й перезапускайте контейнер: entrypoint збере сторінку заново.
 
 ```bash
-docker run --rm -p 127.0.0.1:8080:8080 -v astro-search-data:/data \
-  -v ./frontend/src:/app/frontend/src:ro -v ./frontend/index.html:/app/frontend/index.html:ro astro-search
+docker run --rm -p 127.0.0.1:8080:8080 -v sky-label-data:/data \
+  -v ./frontend/src:/app/frontend/src:ro -v ./frontend/index.html:/app/frontend/index.html:ro sky-label
 ```
 
 `-e ASTRO_WEB_BUILD=0` вимикає збірку на запуску.
@@ -53,8 +53,8 @@ python scripts/prepare_data.py --out ./catalog
 sudo apt install astrometry.net astrometry-data-tycho2-10-19   # необов'язково
 
 (cd frontend && npm ci && npm run build)                       # сторінка в frontend/dist
-ASTRO_CATALOG_DIR=./catalog python -m astro_search             # сервер на 127.0.0.1:8080
-ASTRO_CATALOG_DIR=./catalog python -m astro_search.cli photo.dng --out result.json   # без сервера
+ASTRO_CATALOG_DIR=./catalog python -m sky_label                # сервер на 127.0.0.1:8080
+ASTRO_CATALOG_DIR=./catalog python -m sky_label.cli photo.dng --out result.json   # без сервера
 ```
 
 Тести без каталогу й мережі (геометрія, підгонка дисторсії, вибір місця, параметри API): `pip install -r requirements-dev.txt && python -m pytest`.

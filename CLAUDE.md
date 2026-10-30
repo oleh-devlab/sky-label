@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-astro-search is a local, offline web service for night-sky photos: it finds stars on a frame, plate-solves it, labels stars, planets, the Moon and constellations, computes altitude/azimuth and reports accuracy. Backend is Python (aiohttp); frontend is Vite + TypeScript without a framework. README.md documents the API and the `result.json` schema. IDEAS.md records verified results, open questions and the plan; update its status lines when you finish something it lists.
+SkyLabel is a local, offline web service for night-sky photos: it finds stars on a frame, plate-solves it, labels stars, planets, the Moon and constellations, computes altitude/azimuth and reports accuracy. Backend is Python (aiohttp); frontend is Vite + TypeScript without a framework. README.md documents the API and the `result.json` schema. IDEAS.md records verified results, open questions and the plan; update its status lines when you finish something it lists.
 
 The UI, docs, code comments and API error messages are in Ukrainian. Keep them in Ukrainian. Commit messages are in English.
 
@@ -15,24 +15,24 @@ python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
 python scripts/prepare_data.py --out ./catalog          # downloads HYG + constellation lines, builds tetra3.db (~15 s)
 (cd frontend && npm ci && npm run build)                 # page into frontend/dist
-ASTRO_CATALOG_DIR=./catalog python -m astro_search       # server on 127.0.0.1:8080
-ASTRO_CATALOG_DIR=./catalog python -m astro_search.cli photo.jpg --time 2024-11-01T22:30:01+02:00 --out result.json
+ASTRO_CATALOG_DIR=./catalog python -m sky_label          # server on 127.0.0.1:8080
+ASTRO_CATALOG_DIR=./catalog python -m sky_label.cli photo.jpg --time 2024-11-01T22:30:01+02:00 --out result.json
 ```
 
-`astro_search.cli` writes `preview.jpg` into the current directory by default (it is git-ignored).
+`sky_label.cli` writes `preview.jpg` into the current directory by default (it is git-ignored).
 
 - Frontend with hot reload: run the server, then `cd frontend && npm run dev` (Vite at `http://localhost:5173/static/`, `/api` proxied to `127.0.0.1:8080` or `$ASTRO_API`).
 - Type-check the frontend: `cd frontend && npm run typecheck`. `npm run build` type-checks too.
 - Unit tests (no catalog or network needed): `pip install -r requirements-dev.txt && python -m pytest`. Run a single test with `python -m pytest tests/test_distortion.py::test_choose_prefers_plain_tan_without_distortion`. They cover projection helpers, the distortion fit and model choice, location priority and observation warnings, and API parameter validation.
 - Accuracy check after touching detection, solving or refinement: `ASTRO_CATALOG_DIR=./catalog python scripts/check_accuracy.py`. It renders 16 synthetic frames from known WCS (no distortion, barrel, the wavy distortion measured on a real Galaxy S24 Ultra frame, narrow field; stars everywhere, in one half, one quarter, bright only), runs detection → tetra3rs → refine and measures error over the whole frame, including the empty parts. It exits 1 if any case leaves its threshold in `LIMITS`.
 - There is no configured linter.
-- Docker: `docker build -t astro-search .` and `docker run --rm -p 127.0.0.1:8080:8080 -v astro-search-data:/data astro-search`. Docker Hub is blocked from the Claude cloud environment, so the image cannot be built there; verify the steps by running them directly (venv, `prepare_data.py`, `scripts/entrypoint.sh`).
+- Docker: `docker build -t sky-label .` and `docker run --rm -p 127.0.0.1:8080:8080 -v sky-label-data:/data sky-label`. Docker Hub is blocked from the Claude cloud environment, so the image cannot be built there; verify the steps by running them directly (venv, `prepare_data.py`, `scripts/entrypoint.sh`).
 
-Configuration is env vars, all `ASTRO_*`, read in `astro_search/config.py`. The README has the full table.
+Configuration is env vars, all `ASTRO_*`, read in `sky_label/config.py`. The README has the full table.
 
 ## Architecture
 
-### Processing pipeline (`astro_search/pipeline.py: process`)
+### Processing pipeline (`sky_label/pipeline.py: process`)
 
 1. `ingest.load_image` reads JPG/PNG/HEIC through Pillow, RAW through rawpy and linear DNG through tifffile. It returns a grayscale array, an RGB preview of the **same pixel size**, and EXIF metadata. All pixel coordinates in results are 0-based, x right, y down, identical to the preview. FITS `CRPIX` is 1-based.
 2. `stars.detect` subtracts background, keeps peaks above 5σ (MAD) and centroids them. For raster images it also drops strongly coloured points.

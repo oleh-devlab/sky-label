@@ -1,6 +1,6 @@
 import pytest
 
-from astro_search.server import BadRequest, _parse_params
+from sky_label.server import BadRequest, _parse_params
 
 
 def test_time_is_converted_to_utc():
