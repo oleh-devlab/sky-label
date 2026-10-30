@@ -4,9 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 astro-search is a local, offline web service for night-sky photos: it finds stars on a frame, plate-solves it, labels stars, planets, the Moon and constellations, computes altitude/azimuth and reports accuracy. Backend is Python (aiohttp); frontend is Vite + TypeScript without a framework. README.md documents the API and the `result.json` schema. IDEAS.md records verified results, open questions and the plan; update its status lines when you finish something it lists.
 
-The UI, docs, code comments and API error messages are in Ukrainian. Keep them in Ukrainian. Commit messages are in English. Changes are committed and pushed directly to `main`; there is no pull-request workflow.
-
-Write docs (README, IDEAS.md, this file, code comments) for a reader who only has this repository. Do not refer to other repositories, chat discussions or "what we decided". State facts and decisions directly, and say which photo or setup a measurement comes from.
+The UI, docs, code comments and API error messages are in Ukrainian. Keep them in Ukrainian. Commit messages are in English.
 
 ## Commands
 
