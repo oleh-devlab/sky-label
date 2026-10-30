@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 astro-search is a local, offline web service for night-sky photos: it finds stars on a frame, plate-solves it, labels stars, planets, the Moon and constellations, computes altitude/azimuth and reports accuracy. Backend is Python (aiohttp); frontend is Vite + TypeScript without a framework. README.md documents the API and the `result.json` schema. IDEAS.md records verified results, open questions and the plan; update its status lines when you finish something it lists.
 
-The UI, docs, code comments and API error messages are in Ukrainian. Keep them in Ukrainian. Commit messages so far are in English. The owner asked for pushes to go straight to `main`.
+The UI, docs, code comments and API error messages are in Ukrainian. Keep them in Ukrainian. Commit messages are in English. Changes are committed and pushed directly to `main`; there is no pull-request workflow.
+
+Write docs (README, IDEAS.md, this file, code comments) for a reader who only has this repository. Do not refer to other repositories, chat discussions or "what we decided". State facts and decisions directly, and say which photo or setup a measurement comes from.
 
 ## Commands
 
@@ -24,7 +26,7 @@ ASTRO_CATALOG_DIR=./catalog python -m astro_search.cli photo.jpg --time 2024-11-
 - Frontend with hot reload: run the server, then `cd frontend && npm run dev` (Vite at `http://localhost:5173/static/`, `/api` proxied to `127.0.0.1:8080` or `$ASTRO_API`).
 - Type-check the frontend: `cd frontend && npm run typecheck`. `npm run build` type-checks too.
 - Unit tests (no catalog or network needed): `pip install -r requirements-dev.txt && python -m pytest`. Run a single test with `python -m pytest tests/test_distortion.py::test_choose_prefers_plain_tan_without_distortion`. They cover projection helpers, the distortion fit and model choice, location priority and observation warnings, and API parameter validation.
-- Accuracy check after touching detection, solving or refinement: `ASTRO_CATALOG_DIR=./catalog python scripts/check_accuracy.py`. It renders 16 synthetic frames from known WCS (no distortion, barrel, the wavy distortion of a Galaxy S24 Ultra, narrow field; stars everywhere, in one half, one quarter, bright only), runs detection → tetra3rs → refine and measures error over the whole frame, including the empty parts. It exits 1 if any case leaves its threshold in `LIMITS`.
+- Accuracy check after touching detection, solving or refinement: `ASTRO_CATALOG_DIR=./catalog python scripts/check_accuracy.py`. It renders 16 synthetic frames from known WCS (no distortion, barrel, the wavy distortion measured on a real Galaxy S24 Ultra frame, narrow field; stars everywhere, in one half, one quarter, bright only), runs detection → tetra3rs → refine and measures error over the whole frame, including the empty parts. It exits 1 if any case leaves its threshold in `LIMITS`.
 - There is no configured linter.
 - Docker: `docker build -t astro-search .` and `docker run --rm -p 127.0.0.1:8080:8080 -v astro-search-data:/data astro-search`. Docker Hub is blocked from the Claude cloud environment, so the image cannot be built there; verify the steps by running them directly (venv, `prepare_data.py`, `scripts/entrypoint.sh`).
 
