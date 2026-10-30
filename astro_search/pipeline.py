@@ -28,6 +28,41 @@ class Overrides:
     lon: float | None = None
     elevation_m: float | None = None
     fov_deg: float | None = None
+    # «Звичне місце» користувача: береться, лише якщо в EXIF немає GPS
+    fallback_lat: float | None = None
+    fallback_lon: float | None = None
+    fallback_elevation_m: float | None = None
+
+
+def _resolve_location(ov: Overrides, meta, cfg: Config) -> dict:
+    """Місце спостереження: вручну → EXIF → звичне місце → за замовчуванням сервера."""
+    if ov.lat is not None and ov.lon is not None:
+        lat, lon, elev, source = ov.lat, ov.lon, ov.elevation_m, "user"
+    elif meta.gps_lat is not None:
+        lat, lon, elev, source = meta.gps_lat, meta.gps_lon, meta.gps_elevation_m, "exif"
+    elif ov.fallback_lat is not None and ov.fallback_lon is not None:
+        lat, lon, elev, source = ov.fallback_lat, ov.fallback_lon, ov.fallback_elevation_m, "fallback"
+    else:
+        lat, lon, elev, source = cfg.default_lat, cfg.default_lon, cfg.default_elevation_m, "default"
+    elev = cfg.default_elevation_m if elev is None else elev
+    return {"lat": lat, "lon": lon, "elevation_m": elev, "source": source}
+
+
+def _observation_warnings(obs: dict) -> list[str]:
+    """Попередження, що залежать лише від часу й місця (перераховуються разом з ними)."""
+    out = []
+    if obs["time_utc"] is None:
+        if obs["camera"].get("local_time_without_offset"):
+            out.append("У EXIF є місцевий час без часового поясу; вкажіть час з поясом, "
+                       "щоб порахувати планети й висоту над горизонтом.")
+        else:
+            out.append("Час зйомки невідомий: планети й висота над горизонтом не рахуються.")
+    loc = obs["location"]
+    if loc["source"] == "default" and obs["time_utc"] is not None:
+        out.append(f"Місце зйомки невідоме (у EXIF немає GPS): висоти, азимути, горизонт і Місяць "
+                   f"пораховано для місця за замовчуванням ({loc['lat']:.4f}°, {loc['lon']:.4f}°). "
+                   "Вкажіть, де знято фото.")
+    return out
 
 
 def _decimal_year(t: datetime) -> float:
@@ -50,27 +85,14 @@ def process(image_path: Path, preview_path: Path, cfg: Config, ov: Overrides | N
     when, time_source = ov.time_utc, "user" if ov.time_utc else None
     if when is None and im.meta.time_utc is not None:
         when, time_source = im.meta.time_utc, "exif"
-    if when is None:
-        if im.meta.local_time_without_offset:
-            warnings.append("У EXIF є місцевий час без часового поясу; передайте час з поясом, "
-                            "щоб порахувати планети й висоту над горизонтом.")
-        else:
-            warnings.append("Час зйомки невідомий: планети й висота над горизонтом не рахуються.")
-
-    if ov.lat is not None and ov.lon is not None:
-        lat, lon, elev, loc_source = ov.lat, ov.lon, ov.elevation_m, "user"
-    elif im.meta.gps_lat is not None:
-        lat, lon, elev, loc_source = im.meta.gps_lat, im.meta.gps_lon, im.meta.gps_elevation_m, "exif"
-    else:
-        lat, lon, elev, loc_source = cfg.default_lat, cfg.default_lon, cfg.default_elevation_m, "default"
-    elev = cfg.default_elevation_m if elev is None else elev
-
     observation = {
         "time_utc": when.isoformat() if when else None,
         "time_source": time_source,
-        "location": {"lat": lat, "lon": lon, "elevation_m": elev, "source": loc_source},
+        "location": _resolve_location(ov, im.meta, cfg),
         "camera": im.meta.to_dict(),
     }
+    observation["warnings"] = _observation_warnings(observation)
+    warnings.extend(observation["warnings"])
 
     # --- зорі на кадрі
     t0 = time.perf_counter()
@@ -127,8 +149,6 @@ def process(image_path: Path, preview_path: Path, cfg: Config, ov: Overrides | N
     idx = np.nonzero(bright)[0][sel]
     matched = dict(zip(sol.matched_cat.tolist(), range(len(sol.matched_cat))))
     nearby = _nearby_detections(sol, idx, sx, sy, dets)
-    if when is not None and len(idx):
-        alt, alt_r, az = sky.star_altaz(ra_b[sel], dec_b[sel], when, lat, lon, elev)
     stars = []
     for k, i in enumerate(idx):
         item = cat.describe(int(i))
@@ -144,9 +164,6 @@ def process(image_path: Path, preview_path: Path, cfg: Config, ov: Overrides | N
                                  "in_fit": True}
         elif int(i) in nearby:
             item["detection"] = nearby[int(i)]
-        if when is not None:
-            item.update({"alt_deg": round(float(alt[k]), 3), "alt_refracted_deg": round(float(alt_r[k]), 3),
-                         "az_deg": round(float(az[k]), 3)})
         stars.append(item)
     stars.sort(key=lambda s: s["mag"])
     result["stars"] = stars
@@ -159,12 +176,77 @@ def process(image_path: Path, preview_path: Path, cfg: Config, ov: Overrides | N
         result["constellations"] = sky.constellation_lines(sol.wcs, im.width, im.height, ra_all, dec_all, lines)
         timings["constellations_s"] = time.perf_counter() - t0
 
-    # --- планети, Місяць, горизонт
-    if when is not None:
-        t0 = time.perf_counter()
-        result["bodies"] = sky.bodies(sol.wcs, im.width, im.height, when, lat, lon, elev, dets)
-        result["horizontal"] = sky.horizontal(sol.wcs, im.width, im.height, when, lat, lon, elev)
-        timings["sky_s"] = time.perf_counter() - t0
+    # --- висоти зір, планети, Місяць, горизонт
+    _apply_observation(result, sol.wcs, dets)
+    return _finish(result)
+
+
+def _apply_observation(result: dict, wcs, dets: np.ndarray) -> None:
+    """Усе, що залежить від часу й місця: висоти зір, тіла Сонячної системи, сітка горизонту.
+
+    Положення зір на кадрі й лінії сузір'їв від місця не залежать, тож тут не чіпаються.
+    """
+    obs = result["observation"]
+    loc = obs["location"]
+    stars = result["stars"]
+    for st in stars:
+        for k in ("alt_deg", "alt_refracted_deg", "az_deg"):
+            st.pop(k, None)
+    result["bodies"], result["horizontal"] = [], None
+    result["timings"].pop("sky_s", None)
+    if obs["time_utc"] is None:
+        return
+    t0 = time.perf_counter()
+    when = datetime.fromisoformat(obs["time_utc"])
+    lat, lon, elev = loc["lat"], loc["lon"], loc["elevation_m"]
+    W, H = result["image"]["width"], result["image"]["height"]
+    if stars:
+        alt, alt_r, az = sky.star_altaz(np.array([s["ra_deg"] for s in stars]),
+                                        np.array([s["dec_deg"] for s in stars]), when, lat, lon, elev)
+        for st, a, ar, z in zip(stars, alt, alt_r, az):
+            st.update({"alt_deg": round(float(a), 3), "alt_refracted_deg": round(float(ar), 3),
+                       "az_deg": round(float(z), 3)})
+    result["bodies"] = sky.bodies(wcs, W, H, when, lat, lon, elev, dets)
+    result["horizontal"] = sky.horizontal(wcs, W, H, when, lat, lon, elev)
+    result["timings"]["sky_s"] = time.perf_counter() - t0
+
+
+def reobserve(result: dict, cfg: Config, time_utc: datetime | None = None,
+              lat: float | None = None, lon: float | None = None,
+              elevation_m: float | None = None) -> dict:
+    """Новий час і/або місце для вже розв'язаного кадру — без повторного розпізнавання.
+
+    Розв'язок (WCS) береться з результату. Положення зір на кадрі рахувалися на епоху
+    старого часу; власний рух за роки зсуває їх щонайбільше на кілька ″, тож їх не чіпаємо.
+    """
+    from astropy.io import fits
+    from astropy.wcs import WCS
+
+    if not result.get("solved"):
+        raise ValueError("Кадр не розв'язано: висоти й планети рахувати нема від чого")
+    obs = result["observation"]
+    if time_utc is not None:
+        obs["time_utc"], obs["time_source"] = time_utc.astimezone(timezone.utc).isoformat(), "user"
+    if lat is not None and lon is not None:
+        elev = cfg.default_elevation_m if elevation_m is None else elevation_m
+        obs["location"] = {"lat": lat, "lon": lon, "elevation_m": elev, "source": "user"}
+    elif elevation_m is not None:
+        obs["location"]["elevation_m"] = elevation_m
+
+    # Старі попередження про час і місце замінюються новими (у старих результатах їх
+    # не виділено окремо, тож упізнаємо за початком тексту)
+    old = set(obs.get("warnings", []))
+    legacy = ("Час зйомки невідомий", "У EXIF є місцевий час без часового поясу", "Місце зйомки невідоме")
+    obs["warnings"] = _observation_warnings(obs)
+    result["warnings"] = [w for w in result["warnings"]
+                          if w not in old and not w.startswith(legacy)] + obs["warnings"]
+
+    header = fits.Header()
+    for k, v in result["solution"]["wcs_header"].items():
+        header[k] = v
+    dets = np.array([d[:2] for d in result["detections"]], dtype=float).reshape(-1, 2)
+    result["timings"] = dict(result["timings"])
+    _apply_observation(result, WCS(header), dets)
     return _finish(result)
 
 

@@ -77,6 +77,8 @@ def _worker_run(job_dir: str, original: str, params: dict) -> None:
         time_utc=datetime.fromisoformat(params["time"]) if params.get("time") else None,
         lat=params.get("lat"), lon=params.get("lon"),
         elevation_m=params.get("elevation_m"), fov_deg=params.get("fov_deg"),
+        fallback_lat=params.get("fallback_lat"), fallback_lon=params.get("fallback_lon"),
+        fallback_elevation_m=params.get("fallback_elevation_m"),
     )
     d = Path(job_dir)
     result = process(d / original, d / "preview.jpg", _worker_cfg, ov)
@@ -165,6 +167,17 @@ class JobManager:
     def result(self, job_id: str) -> dict | None:
         f = self.job_dir(job_id) / "result.json"
         return json.loads(f.read_text(encoding="utf-8")) if f.is_file() else None
+
+    def save_result(self, job_id: str, result: dict, params: dict) -> Job:
+        """Записати оновлений результат (напр. новий час чи місце) і параметри задачі."""
+        d = self.job_dir(job_id)
+        tmp = d / "result.json.tmp"
+        tmp.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, d / "result.json")
+        job = self.jobs[job_id]
+        job.params.update(params)
+        self._save(job)
+        return job
 
     def delete(self, job_id: str) -> bool:
         job = self.jobs.get(job_id)

@@ -198,12 +198,19 @@ def horizontal(wcs: WCS, width: int, height: int, when: datetime, lat: float, lo
         if lines:
             grid.append({"kind": "az", "value": az, "lines": lines})
 
-    corners = [pix_to_altaz(px, py) for px, py in
-               [(0, 0), (width - 1, 0), (0, height - 1), (width - 1, height - 1)]]
+    # Діапазон висот: сіткою по всьому кадру, а не лише за кутами — найвища точка
+    # буває всередині (кадр захоплює зеніт), найнижча — посеред краю
+    gx, gy = np.meshgrid(np.linspace(0, width - 1, 21), np.linspace(0, height - 1, 21))
+    g_ra, g_dec = wcs.all_pix2world(gx.ravel(), gy.ravel(), 0)
+    g_alt, _, _ = star_altaz(g_ra, g_dec, when, lat, lon, elevation_m)
+    lo, hi = float(np.min(g_alt)), float(np.max(g_alt))
+    zx, zy = altaz_to_pix([90.0], [0.0])
+    if _in_frame(zx, zy, width, height)[0]:
+        hi = 90.0
     return {
         "center": {"alt_deg": round(c_alt, 3), "alt_refracted_deg": round(c_alt_r, 3),
                    "az_deg": round(c_az, 3)},
-        "alt_range_deg": [round(min(c[0] for c in corners), 2), round(max(c[0] for c in corners), 2)],
+        "alt_range_deg": [round(lo, 2), round(hi, 2)],
         "zenith_direction_deg": None if zenith_angle is None else round(zenith_angle, 2),
         "grid": grid,
     }

@@ -2,6 +2,7 @@ import "./style.css";
 
 import { api, type Health, type Job } from "./api";
 import { ResultPanel } from "./panels";
+import { acceptPastedPair, fillTzSelect, fmtPlace, geolocate, getHome, isoWithOffset, setHome } from "./place";
 import { startStarfield } from "./starfield";
 import { $, ago, duration, h, icon, num } from "./util";
 import { Viewer, type Layer } from "./viewer";
@@ -39,8 +40,27 @@ async function loadHealth() {
     ...solvers.map(([name, ok]) => h(`span.pill.${ok ? "good" : "off"}`, { title: ok ? "розв'язувач доступний" : "розв'язувач недоступний" }, h("i"), name)),
     ...(health.queue_length ? [h("span.pill.warn", {}, h("i"), `у черзі: ${health.queue_length}`)] : []),
   );
-  const dl = health.default_location;
-  $("#default-loc").textContent = `Без GPS в EXIF і без координат тут береться ${num(dl.lat, 4)}°, ${num(dl.lon, 4)}°.`;
+  renderLocHint();
+}
+
+/** Підказка у формі: яке місце візьметься для фото без GPS. */
+function renderLocHint() {
+  const el = $("#default-loc");
+  const home = getHome();
+  if (home) {
+    el.replaceChildren(`Для фото без GPS береться ваше звичне місце: ${fmtPlace(home)}. `,
+      h("button.link", { type: "button", onclick: () => { setHome(null); renderLocHint(); } }, "Забути"));
+  } else {
+    const dl = health?.default_location;
+    el.replaceChildren(dl
+      ? `Для фото без GPS зараз береться місце за замовчуванням сервера (${num(dl.lat, 4)}°, ${num(dl.lon, 4)}°). Вкажіть своє й позначте «запам'ятати» — далі воно братиметься саме.`
+      : "");
+  }
+  const remember = form.elements.namedItem("remember") as HTMLInputElement;
+  remember.checked = !home;
+  // Підказки в полях — звичне місце, а не чиєсь чуже за замовчуванням
+  (form.elements.namedItem("lat") as HTMLInputElement).placeholder = home ? String(home.lat) : "напр. 50.45";
+  (form.elements.namedItem("lon") as HTMLInputElement).placeholder = home ? String(home.lon) : "напр. 30.52";
 }
 
 // ---------------------------------------------------------------- список задач
@@ -114,6 +134,11 @@ async function openJob(id: string | null) {
       await api.remove(job.id);
       location.hash = "#/";
       refreshJobs();
+    }, async (body, remember) => {
+      if (Object.keys(body).length) await api.observe(job.id, body);
+      if (remember) setHome(remember);
+      renderLocHint();
+      await openJob(job.id);
     });
     viewer.onSelect = (t) => panel.highlight(t);
     current = { viewer, panel };
@@ -182,25 +207,7 @@ const feature = (glyph: string, title: string, text: string) => h("div.feature",
 const form = $<HTMLFormElement>("#upload");
 const fileInput = $<HTMLInputElement>("#file");
 
-function initTzSelect() {
-  const sel = form.elements.namedItem("tz") as HTMLSelectElement;
-  const own = -new Date().getTimezoneOffset();
-  for (let m = -12 * 60; m <= 14 * 60; m += 30) {
-    if (m % 60 && ![-570, -210, 210, 270, 330, 390, 570, 630].includes(m)) continue;
-    const sign = m < 0 ? "−" : "+";
-    const hh = String(Math.floor(Math.abs(m) / 60)).padStart(2, "0");
-    const mm = String(Math.abs(m) % 60).padStart(2, "0");
-    sel.append(h("option", { value: String(m), selected: m === own }, `UTC${sign}${hh}:${mm}`));
-  }
-}
-
-/** datetime-local + зсув у хвилинах → ISO 8601 з поясом. */
-function isoWithOffset(local: string, offsetMin: number): string {
-  const sec = local.length === 16 ? `${local}:00` : local;
-  const sign = offsetMin < 0 ? "-" : "+";
-  const a = Math.abs(offsetMin);
-  return `${sec}${sign}${String(Math.floor(a / 60)).padStart(2, "0")}:${String(a % 60).padStart(2, "0")}`;
-}
+const initTzSelect = () => fillTzSelect(form.elements.namedItem("tz") as HTMLSelectElement);
 
 function setFile(f: File | null) {
   const dz = $("#dropzone");
@@ -219,13 +226,24 @@ form.addEventListener("submit", async (e) => {
   if (!f) return;
   const fd = new FormData();
   fd.append("file", f);
-  const val = (n: string) => (form.elements.namedItem(n) as HTMLInputElement).value.trim();
+  // Десяткова кома теж годиться: «49,84» → «49.84»
+  const val = (n: string) => (form.elements.namedItem(n) as HTMLInputElement).value.trim().replace(",", ".");
   if (val("time_local")) fd.append("time", isoWithOffset(val("time_local"), Number(val("tz"))));
   for (const k of ["lat", "lon", "elevation_m", "fov_deg"]) if (val(k)) fd.append(k, val(k));
   if (!!val("lat") !== !!val("lon")) {
     $("#up-error").textContent = "Вкажіть і широту, і довготу.";
     return;
   }
+  // Звичне місце: сервер візьме його, лише якщо в EXIF немає GPS
+  const home = getHome();
+  if (home) {
+    fd.append("fallback_lat", String(home.lat));
+    fd.append("fallback_lon", String(home.lon));
+    if (home.elevation_m != null) fd.append("fallback_elevation_m", String(home.elevation_m));
+  }
+  const rememberNew = (form.elements.namedItem("remember") as HTMLInputElement).checked && val("lat") && val("lon")
+    ? { lat: Number(val("lat")), lon: Number(val("lon")), elevation_m: val("elevation_m") ? Number(val("elevation_m")) : null }
+    : null;
 
   const btn = $<HTMLButtonElement>("#btn-send");
   const bar = $("#up-progress");
@@ -233,8 +251,10 @@ form.addEventListener("submit", async (e) => {
   bar.hidden = false;
   try {
     const job = await api.upload(fd, (p) => bar.style.setProperty("--p", String(p)));
+    if (rememberNew) setHome(rememberNew);
     form.reset();
     initTzSelect();
+    renderLocHint();
     setFile(null);
     location.hash = `#/${job.id}`;
     refreshJobs();
@@ -247,28 +267,22 @@ form.addEventListener("submit", async (e) => {
   }
 });
 
-$("#btn-geo").addEventListener("click", () => {
+$("#btn-geo").addEventListener("click", async () => {
   const btn = $<HTMLButtonElement>("#btn-geo");
-  if (!navigator.geolocation) {
-    $("#up-error").textContent = "Браузер не дає координат.";
-    return;
-  }
+  const set = (n: string, v: number | null | undefined) => v != null && ((form.elements.namedItem(n) as HTMLInputElement).value = String(v));
   btn.disabled = true;
-  navigator.geolocation.getCurrentPosition(
-    (p) => {
-      const set = (n: string, v: number | null) => v != null && ((form.elements.namedItem(n) as HTMLInputElement).value = v.toFixed(5).replace(/\.?0+$/, ""));
-      set("lat", p.coords.latitude);
-      set("lon", p.coords.longitude);
-      set("elevation_m", p.coords.altitude);
-      btn.disabled = false;
-    },
-    (err) => {
-      $("#up-error").textContent = `Не вдалося отримати місце: ${err.message}`;
-      btn.disabled = false;
-    },
-    { timeout: 10000 },
-  );
+  try {
+    const p = await geolocate();
+    set("lat", p.lat);
+    set("lon", p.lon);
+    set("elevation_m", p.elevation_m != null ? Math.round(p.elevation_m) : null);
+  } catch (err) {
+    $("#up-error").textContent = `Не вдалося отримати місце: ${(err as Error).message}`;
+  } finally {
+    btn.disabled = false;
+  }
 });
+acceptPastedPair(form.elements.namedItem("lat") as HTMLInputElement, form.elements.namedItem("lon") as HTMLInputElement);
 
 // Перетягування файлу будь-куди у вікно
 let dragDepth = 0;
@@ -342,6 +356,7 @@ window.addEventListener("keydown", (e) => {
 
 startStarfield($<HTMLCanvasElement>("#starfield"));
 initTzSelect();
+renderLocHint();
 window.addEventListener("hashchange", () => openJob(routeId()));
 loadHealth();
 setInterval(loadHealth, 30000);

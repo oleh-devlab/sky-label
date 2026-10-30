@@ -45,13 +45,14 @@
                   <select name="tz" title="Часовий пояс фото"></select>
                 </span>
               </label>
-              <label>Широта, °<input type="number" name="lat" step="any" min="-90" max="90" placeholder="49.8397" /></label>
-              <label>Довгота, °<input type="number" name="lon" step="any" min="-180" max="180" placeholder="24.0297" /></label>
+              <label>Широта, °<input type="text" inputmode="decimal" name="lat" placeholder="49.8397" title="Можна вставити пару «широта, довгота»" /></label>
+              <label>Довгота, °<input type="text" inputmode="decimal" name="lon" placeholder="24.0297" /></label>
               <label>Висота, м<input type="number" name="elevation_m" step="any" placeholder="300" /></label>
               <label>Поле зору, °<input type="number" name="fov_deg" step="any" min="1" max="180" placeholder="авто" /></label>
               <button type="button" class="btn ghost span2" id="btn-geo">
                 <svg aria-hidden="true"><use href="#i-pin" /></svg> Моє місце зараз
               </button>
+              <label class="check span2"><input type="checkbox" name="remember" /> Запам'ятати як звичне місце: брати його для фото без GPS</label>
             </div>
             <p class="hint" id="default-loc"></p>
           </details>

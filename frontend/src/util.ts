@@ -139,7 +139,13 @@ export const CONSTELLATIONS: Record<string, string> = {
 export const SOURCE_UA: Record<string, string> = {
   user: "вказано вручну",
   exif: "з EXIF",
-  default: "за замовчуванням",
+};
+
+export const LOCATION_SOURCE_UA: Record<string, string> = {
+  user: "вказано вручну",
+  exif: "GPS з фото",
+  fallback: "ваше звичне місце",
+  default: "за замовчуванням, справжнє невідоме",
 };
 
 export const KIND_UA: Record<string, string> = {

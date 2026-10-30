@@ -1,8 +1,9 @@
 // Бічна панель результату: огляд, список об'єктів, точність, дані.
 
-import type { Job, Result } from "./api";
+import type { Job, ObservationUpdate, Result } from "./api";
+import { placeForm, type Place } from "./place";
 import { skyDome } from "./skydome";
-import { BODY_UA, CONSTELLATIONS, KIND_UA, SOURCE_UA, arc, compass, dms, download, h, hms, icon, num, s, when } from "./util";
+import { BODY_UA, CONSTELLATIONS, KIND_UA, LOCATION_SOURCE_UA, SOURCE_UA, arc, compass, dms, download, h, hms, icon, num, s, when } from "./util";
 import { targetName, type Target, type Viewer } from "./viewer";
 
 type Tab = "overview" | "objects" | "accuracy" | "data";
@@ -19,12 +20,15 @@ export class ResultPanel {
   private tab: Tab = "overview";
   private list: HTMLElement | null = null;
   private search: HTMLInputElement | null = null;
+  /** Відкрита форма зміни часу й місця (і що в ній підсвітити першим). */
+  private editing: "time" | "place" | null = null;
 
   constructor(
     private job: Job,
     private r: Result,
     private viewer: Viewer,
     private onDelete: () => void,
+    private onObservation: (body: ObservationUpdate, remember: Place | null) => Promise<void>,
   ) {
     const tabs = h("div.tabs", { role: "tablist" },
       TABS.map(([id, name]) => h("button.tab", { role: "tab", "data-tab": id, "aria-selected": String(id === this.tab), onclick: () => this.show(id) }, name)));
@@ -66,6 +70,35 @@ export class ResultPanel {
 
     if (!r.solved) {
       out.push(h("div.callout.bad", {}, h("b", {}, "Небо не розпізнано"), h("p", {}, r.warnings.join(" ") || "Спробуйте інший кадр або підкажіть поле зору.")));
+    }
+
+    const obsv = r.observation;
+    const edit = (focus: "time" | "place") => {
+      this.editing = focus;
+      this.show("overview");
+    };
+    if (r.solved && this.editing) {
+      out.push(placeForm({
+        timeUtc: obsv.time_utc,
+        place: obsv.location,
+        placeUnknown: obsv.location.source === "default",
+        focus: this.editing,
+        onSubmit: (body, remember) => this.onObservation(body, remember),
+        onCancel: () => {
+          this.editing = null;
+          this.show("overview");
+        },
+      }));
+    } else if (r.solved && !obsv.time_utc) {
+      out.push(h("div.callout.warn", {},
+        h("b", {}, "Коли знято фото?"),
+        h("p", {}, "У EXIF немає часу з часовим поясом. Без нього не порахувати планети, Місяць, висоти й горизонт."),
+        h("button.btn", { onclick: () => edit("time") }, "Вказати час і місце")));
+    } else if (r.solved && obsv.location.source === "default") {
+      out.push(h("div.callout.warn", {},
+        h("b", {}, "Де знято фото?"),
+        h("p", {}, `У EXIF немає GPS, тож висоти, азимути, горизонт і Місяць пораховано для місця за замовчуванням (${num(obsv.location.lat, 4)}°, ${num(obsv.location.lon, 4)}°). Якщо знімали деінде, вкажіть місце — небо перерахується за секунду, а зорі на кадрі лишаться ті самі.`),
+        h("button.btn", { onclick: () => edit("place") }, icon("pin"), "Вказати місце")));
     }
 
     if (hz) {
@@ -115,9 +148,11 @@ export class ResultPanel {
 
     const obs = r.observation;
     const cam = obs.camera;
-    out.push(h("h4", {}, "Зйомка"), h("dl.kv", {},
+    out.push(h("div.section-head", {}, h("h4", {}, "Зйомка"),
+      r.solved && !this.editing ? h("button.link", { onclick: () => edit("time") }, "Змінити час і місце") : null),
+    h("dl.kv", {},
       kv("Час", obs.time_utc ? `${when(obs.time_utc)}` : "невідомий", obs.time_source ? SOURCE_UA[obs.time_source] : null),
-      kv("Місце", `${num(obs.location.lat, 4)}°, ${num(obs.location.lon, 4)}°, ${num(obs.location.elevation_m, 0)} м`, SOURCE_UA[obs.location.source]),
+      kv("Місце", `${num(obs.location.lat, 4)}°, ${num(obs.location.lon, 4)}°, ${num(obs.location.elevation_m, 0)} м`, LOCATION_SOURCE_UA[obs.location.source]),
       cam.model ? kv("Камера", [cam.make, cam.model].filter(Boolean).join(" ")) : null,
       cam.exposure_s != null ? kv("Експозиція", [
         cam.exposure_s >= 1 ? `${num(cam.exposure_s, 1)} с` : `1/${Math.round(1 / cam.exposure_s)} с`,

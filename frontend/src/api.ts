@@ -104,7 +104,11 @@ export interface Result {
   observation: {
     time_utc: string | null;
     time_source: "user" | "exif" | null;
-    location: { lat: number; lon: number; elevation_m: number; source: "user" | "exif" | "default" };
+    /** user — вказано вручну, exif — GPS з фото, fallback — звичне місце з браузера,
+     *  default — місце за замовчуванням сервера (тобто справжнє місце невідоме). */
+    location: { lat: number; lon: number; elevation_m: number; source: "user" | "exif" | "fallback" | "default" };
+    /** Попередження про час і місце (вони ж є в загальному warnings). */
+    warnings?: string[];
     camera: Camera;
   };
   solved: boolean;
@@ -122,6 +126,14 @@ export interface Result {
   detections: [number, number, number][];
   warnings: string[];
   timings: Record<string, number>;
+}
+
+/** Новий час (ISO 8601 з поясом) і/або місце для готового кадру. */
+export interface ObservationUpdate {
+  time?: string;
+  lat?: number;
+  lon?: number;
+  elevation_m?: number;
 }
 
 export class ApiError extends Error {}
@@ -145,6 +157,8 @@ export const api = {
   jobs: () => call<Job[]>("/api/jobs"),
   job: (id: string) => call<Job>(`/api/jobs/${id}`),
   remove: (id: string) => call<void>(`/api/jobs/${id}`, { method: "DELETE" }),
+  observe: (id: string, body: ObservationUpdate) =>
+    call<Job>(`/api/jobs/${id}/observation`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
 
   /** Завантаження через XHR, бо fetch не повідомляє про прогрес відправлення. */
   upload(form: FormData, onProgress: (fraction: number) => void): Promise<Job> {

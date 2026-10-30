@@ -7,6 +7,8 @@
     GET    /api/jobs/{id}/preview     прев'ю (JPEG) у тих самих піксельних координатах
     GET    /api/jobs/{id}/original    завантажений оригінал
     DELETE /api/jobs/{id}             видалити задачу
+    POST   /api/jobs/{id}/observation новий час і/або місце для готового кадру (JSON),
+                                      небо перераховується без повторного розпізнавання
 
 Поля форми POST /api/jobs:
     file          фото (обов'язково): JPG/PNG/TIFF/HEIC або RAW/DNG
@@ -14,10 +16,13 @@
     lat, lon      координати місця зйомки в градусах
     elevation_m   висота над рівнем моря, м
     fov_deg       підказка: горизонтальне поле зору, градуси
+    fallback_lat, fallback_lon, fallback_elevation_m
+                  «звичне місце»: береться, лише якщо в EXIF немає GPS
 """
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import json
 import logging
@@ -29,7 +34,7 @@ from pathlib import Path
 
 from aiohttp import web
 
-from . import __version__, catalog, solve
+from . import __version__, catalog, pipeline, solve
 from .config import Config
 from .ingest import RAW_EXTENSIONS
 from .jobs import DONE, JobManager
@@ -99,6 +104,14 @@ def _parse_params(fields: dict[str, str]) -> dict:
         p["elevation_m"] = _parse_float("elevation_m", fields["elevation_m"], -500, 9000)
     if fields.get("fov_deg"):
         p["fov_deg"] = _parse_float("fov_deg", fields["fov_deg"], 1, 180)
+    has_flat, has_flon = bool(fields.get("fallback_lat")), bool(fields.get("fallback_lon"))
+    if has_flat != has_flon:
+        raise BadRequest("fallback_lat і fallback_lon передаються разом")
+    if has_flat:
+        p["fallback_lat"] = _parse_float("fallback_lat", fields["fallback_lat"], -90, 90)
+        p["fallback_lon"] = _parse_float("fallback_lon", fields["fallback_lon"], -180, 180)
+    if fields.get("fallback_elevation_m"):
+        p["fallback_elevation_m"] = _parse_float("fallback_elevation_m", fields["fallback_elevation_m"], -500, 9000)
     return p
 
 
@@ -207,6 +220,39 @@ async def delete_job(request: web.Request) -> web.Response:
     return web.Response(status=204)
 
 
+async def set_observation(request: web.Request) -> web.Response:
+    """Новий час і/або місце: висоти, планети, Місяць і горизонт перераховуються за секунду."""
+    cfg, jobs = request.app[CFG], request.app[JOBS]
+    job_id = request.match_info["id"]
+    job = jobs.get(job_id)
+    if job is None:
+        return _error(404, "Задачу не знайдено")
+    if job.status != DONE:
+        return _error(409, "Кадр ще не оброблено")
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise ValueError
+    except ValueError:
+        return _error(400, "Очікується JSON-об'єкт: time, lat, lon, elevation_m")
+    allowed = {"time", "lat", "lon", "elevation_m"}
+    fields = {k: str(v) for k, v in body.items() if k in allowed and v not in (None, "")}
+    try:
+        params = _parse_params(fields)
+    except BadRequest as e:
+        return _error(400, str(e))
+    if not params:
+        return _error(400, "Вкажіть час (time) або місце (lat і lon)")
+    result = jobs.result(job_id)
+    if result is None or not result.get("solved"):
+        return _error(409, "Кадр не розв'язано: висоти й планети рахувати нема від чого")
+    when = datetime.fromisoformat(params["time"]) if "time" in params else None
+    result = await asyncio.get_running_loop().run_in_executor(None, functools.partial(
+        pipeline.reobserve, result, cfg, when, params.get("lat"), params.get("lon"), params.get("elevation_m")))
+    job = jobs.save_result(job_id, result, params)
+    return _json(_job_json(job, result))
+
+
 async def index(request: web.Request) -> web.StreamResponse:
     page = request.app[CFG].web_dir / "index.html"
     if page.is_file():
@@ -243,6 +289,7 @@ def create_app(cfg: Config) -> web.Application:
     app.router.add_delete(f"/api/jobs/{JOB_ID}", delete_job)
     app.router.add_get(f"/api/jobs/{JOB_ID}/preview", get_preview)
     app.router.add_get(f"/api/jobs/{JOB_ID}/original", get_original)
+    app.router.add_post(f"/api/jobs/{JOB_ID}/observation", set_observation)
     # Тека може з'явитися вже після старту (збірка фронтенду), тож додаємо маршрут завжди
     cfg.web_dir.mkdir(parents=True, exist_ok=True)
     app.router.add_static("/static/", cfg.web_dir)
