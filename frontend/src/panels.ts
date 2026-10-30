@@ -6,7 +6,7 @@ import { skyDome } from "./skydome";
 import { BODY_UA, CONSTELLATIONS, KIND_UA, LOCATION_SOURCE_UA, SOURCE_UA, arc, compass, dms, download, h, hms, icon, num, s, when } from "./util";
 import { targetName, type Target, type Viewer } from "./viewer";
 
-type Tab = "overview" | "objects" | "accuracy" | "data";
+export type Tab = "overview" | "objects" | "accuracy" | "data";
 const TABS: [Tab, string][] = [
   ["overview", "Огляд"],
   ["objects", "Об'єкти"],
@@ -17,7 +17,7 @@ const TABS: [Tab, string][] = [
 export class ResultPanel {
   readonly el: HTMLElement;
   private body: HTMLElement;
-  private tab: Tab = "overview";
+  tab: Tab = "overview";
   private list: HTMLElement | null = null;
   private search: HTMLInputElement | null = null;
   /** Відкрита форма зміни часу й місця (і що в ній підсвітити першим). */

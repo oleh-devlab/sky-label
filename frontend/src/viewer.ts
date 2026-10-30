@@ -27,6 +27,29 @@ interface Marker {
   r: number;
   priority: number;
   mag: number;
+  /** Рівень підпису: 0 — завжди (власна назва, грецька літера), 1 — номер Флемстіда, 2 — HIP/HR. */
+  tier: number;
+}
+
+/** З якого наближення (відносно «весь кадр») показувати підписи кожного рівня. */
+const TIER_ZOOM = [0, 1.8, 3.5];
+/** Скільки кружечків зір прийнятно на весь кадр: за замовчуванням межа величини підбирається під це. */
+const DEFAULT_MAX_STARS = 250;
+
+function labelTier(st: Star): number {
+  if (st.proper_name) return 0;
+  if (/^(HIP|HR) /.test(st.name)) return 2;
+  if (/^\d/.test(st.name)) return 1;
+  return 0;
+}
+
+/** Що зберегти, перемальовуючи той самий кадр (напр. після зміни часу чи місця). */
+export interface ViewState {
+  sc: number;
+  tx: number;
+  ty: number;
+  magLimit: number;
+  layers: Record<Layer, boolean>;
 }
 
 const FONT = "500 12px Inter, system-ui, sans-serif";
@@ -69,6 +92,9 @@ export class Viewer {
   private selected: Marker | null = null;
   private layers: Record<Layer, boolean> = { stars: true, bodies: true, constellations: true, grid: true, detections: false, labels: true };
   magLimit = 6.5;
+  /** Сюди зовнішній код додає свої кнопки (права панель, повний екран). */
+  readonly tools: HTMLElement = h("div.view-tools");
+  private lastSize: [number, number] = [0, 0];
   onSelect: (t: Target | null) => void = () => {};
   private ro: ResizeObserver;
 
@@ -82,6 +108,11 @@ export class Viewer {
     if (!result.horizontal) this.layers.grid = false;
     if (!result.constellations?.length) this.layers.constellations = false;
     if (!result.solved) this.layers.detections = true;
+    // Найслабша межа, за якої кружечків не забагато (на ширококутному кадрі їх сотні)
+    for (const lim of [6.5, 6, 5.5, 5, 4.5]) {
+      this.magLimit = lim;
+      if (result.stars.filter((st) => st.mag <= lim).length <= DEFAULT_MAX_STARS) break;
+    }
 
     this.img = h("img.photo", { src: job.links.preview, alt: job.filename, draggable: "false" });
     this.img.style.width = `${this.W}px`;
@@ -106,12 +137,43 @@ export class Viewer {
     this.applyLayerClasses();
 
     this.ro = new ResizeObserver(() => {
-      const first = this.fitScale === 1 && this.sc === 1;
+      const { clientWidth: cw, clientHeight: ch } = this.stage;
+      const [pw, ph] = this.lastSize;
+      this.lastSize = [cw, ch];
+      const wasFit = Math.abs(this.sc / this.fitScale - 1) < 1e-3;
       this.computeFit();
-      if (first) this.fit(false);
-      else this.schedule();
+      if (!pw || wasFit) {
+        // Перший показ або вид «весь кадр»: вписати заново під новий розмір
+        this.fit(false);
+      } else {
+        // Інакше лишити на місці те, що було в центрі (панелі згортаються з боків)
+        this.tx += (cw - pw) / 2;
+        this.ty += (ch - ph) / 2;
+        this.schedule();
+      }
     });
     this.ro.observe(this.stage);
+  }
+
+  getView(): ViewState {
+    return { sc: this.sc, tx: this.tx, ty: this.ty, magLimit: this.magLimit, layers: { ...this.layers } };
+  }
+
+  /** Відновити вид після перемальовування (викликати, коли переглядач уже на сторінці). */
+  setView(v: ViewState) {
+    for (const l of Object.keys(v.layers) as Layer[]) if (l in this.layers && this.layers[l] !== v.layers[l]) this.toggle(l, v.layers[l]);
+    this.magLimit = v.magLimit;
+    const range = this.el.querySelector<HTMLInputElement>(".mag input");
+    if (range) {
+      range.value = String(v.magLimit);
+      range.dispatchEvent(new Event("input"));
+    }
+    requestAnimationFrame(() => {
+      this.computeFit();
+      [this.sc, this.tx, this.ty] = [v.sc, v.tx, v.ty];
+      this.lastSize = [this.stage.clientWidth, this.stage.clientHeight];
+      this.schedule();
+    });
   }
 
   destroy() {
@@ -144,11 +206,12 @@ export class Viewer {
     const zoomBtn = (name: string, title: string, fn: () => void) => h("button.icon-btn", { title, onclick: fn }, icon(name));
     return h("div.toolbar", {},
       h("div.chips", {}, chips),
-      this.result.stars.length ? h("label.mag", { title: "Показувати зорі до цієї зоряної величини" }, "до", mag, magOut) : null,
+      this.result.stars.length ? h("label.mag", { title: "Показувати зорі до цієї зоряної величини" }, h("span.mag-label", {}, "до"), mag, magOut) : null,
       h("div.zoom", {},
         zoomBtn("minus", "Віддалити (−)", () => this.zoomBy(1 / 1.6)),
         zoomBtn("fit", "Весь кадр (0)", () => this.fit()),
         zoomBtn("plus", "Наблизити (+)", () => this.zoomBy(1.6)),
+        this.tools,
       ),
     );
   }
@@ -168,8 +231,8 @@ export class Viewer {
 
   private compassWidget() {
     const hz = this.result.horizontal;
-    const sol = this.result.solution;
-    if (!hz && !sol) return null;
+    // Без часу зйомки напрямку на зеніт немає — порожній компас лише заважав би
+    if (!hz) return null;
     const zen = hz?.zenith_direction_deg;
     const svg = s("svg", { viewBox: "-50 -50 100 100", "aria-hidden": "true" },
       s("circle", { r: "44", class: "ring" }),
@@ -250,7 +313,7 @@ export class Viewer {
     r.detections.forEach(([x, y, f]) => {
       const rad = Math.max(2.5, Math.min(7, 4 + Math.log10(f / fRef) * 2));
       const g = s("g", { class: "det" }, s("circle", { r: rad.toFixed(1) }));
-      add({ target: null, x, y, g, label: null, r: rad, priority: 1e9, mag: 99 });
+      add({ target: null, x, y, g, label: null, r: rad, priority: 1e9, mag: 99, tier: 0 });
     });
 
     // Зорі каталогу
@@ -259,7 +322,7 @@ export class Viewer {
       const label = s("text", { x: (rad + 4).toFixed(1), y: "4" }, st.name);
       const g = s("g", { class: `star${st.detection ? " matched" : ""}${st.proper_name ? " named" : ""}`, tabindex: "-1" },
         s("circle", { r: rad.toFixed(1) }), label);
-      add({ target: { kind: "star", item: st }, x: st.x, y: st.y, g, label, r: rad, priority: st.mag - (st.proper_name ? 1.5 : 0), mag: st.mag });
+      add({ target: { kind: "star", item: st }, x: st.x, y: st.y, g, label, r: rad, priority: st.mag - (st.proper_name ? 1.5 : 0), mag: st.mag, tier: labelTier(st) });
     }
 
     // Планети, Місяць, Сонце: над зорями
@@ -273,7 +336,7 @@ export class Viewer {
         s("circle", { r: String(rad) }),
         s("text", { class: "glyph", y: "5", "text-anchor": "middle" }, info.glyph),
         label);
-      add({ target: { kind: "body", item: b }, x: b.x, y: b.y, g, label, r: rad, priority: -100 + (b.mag ?? 0), mag: -99 });
+      add({ target: { kind: "body", item: b }, x: b.x, y: b.y, g, label, r: rad, priority: -100 + (b.mag ?? 0), mag: -99, tier: 0 });
     }
   }
 
@@ -392,9 +455,11 @@ export class Viewer {
     // підписи зір) і нарешті підписи зір. Назви сузір'їв перевіряються лише з підписами планет.
     const constOn = this.layers.constellations && this.layers.labels;
     const bodiesFirst = visible.filter((m) => m.label && m.target?.kind === "body");
+    const zoomRel = sc / this.fitScale;
     const placeLabel = (m: Marker) => {
       const layerOn = m.target?.kind === "star" ? this.layers.stars : this.layers.bodies;
-      let show = this.layers.labels && layerOn;
+      // Номери Флемстіда й HIP — лише при наближенні, інакше вони засипають кадр
+      let show = this.layers.labels && layerOn && (m.tier === 0 || m === this.selected || zoomRel >= TIER_ZOOM[m.tier]);
       if (show) {
         const x = tx + m.x * sc + m.r + 3;
         const y = ty + m.y * sc;

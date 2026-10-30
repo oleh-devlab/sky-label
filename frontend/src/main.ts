@@ -17,6 +17,67 @@ let pollTimer = 0;
 
 const main = $("#main");
 const jobList = $("#jobs");
+const railJobs = $("#rail-jobs");
+
+// ---------------------------------------------------------------- розкладка
+
+/** Ліва панель кадрів і права панель результату: розгорнуті чи ні (пам'ятається). */
+// Поки ви не вибрали самі, ліва панель розгорнута лише на широких екранах:
+// на ноутбуці вона забирає в кадру забагато місця
+const ui = { side: window.innerWidth >= 1500, panel: true };
+const narrow = matchMedia("(max-width: 820px)");
+const UI_KEY = "astro-ui";
+try {
+  Object.assign(ui, JSON.parse(localStorage.getItem(UI_KEY) ?? "{}"));
+} catch {
+  /* приватний режим */
+}
+// На телефоні ліва панель висувна й за замовчуванням схована
+if (narrow.matches) ui.side = false;
+
+function saveUi() {
+  try {
+    // Висунута на телефоні панель — тимчасовий стан, його не запам'ятовуємо
+    localStorage.setItem(UI_KEY, JSON.stringify({ side: narrow.matches ? true : ui.side, panel: ui.panel }));
+  } catch {
+    /* приватний режим */
+  }
+}
+
+function applyLayout() {
+  document.body.classList.toggle("side-collapsed", !ui.side);
+  document.body.classList.toggle("panel-collapsed", !ui.panel);
+  $("#btn-side").setAttribute("aria-expanded", String(ui.side));
+  main.querySelectorAll(".panel-toggle").forEach((b) => b.setAttribute("aria-pressed", String(ui.panel)));
+}
+
+function setSide(open: boolean) {
+  ui.side = open;
+  saveUi();
+  applyLayout();
+}
+
+function setPanel(open: boolean) {
+  ui.panel = open;
+  saveUi();
+  applyLayout();
+}
+
+function toggleFullscreen() {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else main.querySelector(".result")?.requestFullscreen().catch(() => {});
+}
+
+$("#btn-side").addEventListener("click", () => setSide(!ui.side));
+$(".layout").append(h("div.scrim", { onclick: () => setSide(false) }));
+
+/** Коротке повідомлення внизу екрана (коли форма завантаження згорнута). */
+function toast(text: string, kind: "info" | "error" = "info") {
+  const el = h(`div.toast.${kind}`, { role: kind === "error" ? "alert" : "status" }, text);
+  document.body.append(el);
+  setTimeout(() => el.classList.add("out"), kind === "error" ? 6000 : 2500);
+  setTimeout(() => el.remove(), kind === "error" ? 6600 : 3100);
+}
 
 const routeId = () => location.hash.match(/^#\/([0-9a-f]{32})$/)?.[1] ?? null;
 
@@ -69,6 +130,15 @@ const STATUS_UA: Record<Job["status"], string> = { queued: "у черзі", runn
 
 function renderJobs() {
   $("#jobs-count").textContent = jobs.length ? String(jobs.length) : "";
+  // Вузька смужка згорнутої панелі: лише мініатюри
+  railJobs.replaceChildren(...jobs.map((j) => {
+    const done = j.status === "done" || j.status === "failed";
+    const img = h("img", { src: j.links.preview, alt: "", loading: "lazy" });
+    img.addEventListener("error", () => img.replaceWith(h("span.thumb-ph")), { once: true });
+    return h("li", {}, h(`a.rail-job.${j.status}${j.id === currentId ? ".active" : ""}`,
+      { href: `#/${j.id}`, title: `${j.filename} · ${STATUS_UA[j.status]}` },
+      done ? img : h("span.thumb-ph.spin")));
+  }));
   if (!jobs.length) {
     jobList.replaceChildren(h("li.empty", {}, "Тут з'являться ваші кадри."));
     return;
@@ -111,7 +181,10 @@ function closeCurrent() {
 }
 
 async function openJob(id: string | null) {
+  // Той самий кадр перемальовується (напр. після зміни часу чи місця): зберегти вид і вкладку
+  const keep = current && current.viewer.job.id === id ? { view: current.viewer.getView(), tab: current.panel.tab } : null;
   currentId = id;
+  if (narrow.matches && ui.side) setSide(false);
   renderJobs();
   if (!id) {
     closeCurrent();
@@ -141,8 +214,16 @@ async function openJob(id: string | null) {
       await openJob(job.id);
     });
     viewer.onSelect = (t) => panel.highlight(t);
+    viewer.tools.append(
+      h("button.icon-btn.panel-toggle", { title: "Панель результату (])", "aria-pressed": String(ui.panel), onclick: () => setPanel(!ui.panel) }, icon("panel")),
+      h("button.icon-btn", { title: "Повний екран (F)", onclick: toggleFullscreen }, icon("expand")),
+    );
     current = { viewer, panel };
     main.replaceChildren(h("div.result", {}, viewer.el, panel.el));
+    if (keep) {
+      viewer.setView(keep.view);
+      panel.show(keep.tab);
+    }
   } else if (job.status === "failed") {
     closeCurrent();
     main.replaceChildren(h("div.empty-state.failed", {},
@@ -168,10 +249,11 @@ function renderPending(job: Job) {
     $(".pending-stage", existing).textContent = stage;
     $(".pending-time", existing).textContent = elapsed;
     const img = $<HTMLImageElement>(".pending-img img", existing);
-    if (img && !img.naturalWidth) img.src = `${job.links.preview}?t=${Date.now()}`;
+    // Прев'ю з'являється лише після читання файлу: поки задача в черзі, його не просимо
+    if (img && !img.naturalWidth && job.status === "running") img.src = `${job.links.preview}?t=${Date.now()}`;
     return;
   }
-  const img = h("img", { src: job.links.preview, alt: "" });
+  const img = h("img", { src: job.status === "running" ? job.links.preview : null, alt: "", class: "missing" });
   img.addEventListener("error", () => img.classList.add("missing"));
   img.addEventListener("load", () => img.classList.remove("missing"));
   main.replaceChildren(h("div.pending", { "data-id": job.id },
@@ -191,6 +273,7 @@ function renderWelcome() {
     h("h1", {}, "Що там, на вашому небі?"),
     h("p.lead", {}, "Завантажте фото нічного неба — з телефона чи камери, хоч через вікно. ",
       "astro-search знайде зорі, визначить, куди дивилася камера, підпише зорі, планети й Місяць і покаже, наскільки точно все збіглося."),
+    h("button.btn.primary.cta", { onclick: () => $<HTMLInputElement>("#rail-file").click() }, icon("upload"), "Вибрати фото"),
     h("div.features", {},
       feature("✦", "Plate solving", "tetra3rs за мілісекунди, astrometry.net як запасний варіант, уточнення TAN-SIP за каталогом HYG."),
       feature("♃", "Планети й Місяць", "Положення за ефемеридою JPL DE421 на момент зйомки з вашої точки на Землі."),
@@ -234,37 +317,75 @@ form.addEventListener("submit", async (e) => {
     $("#up-error").textContent = "Вкажіть і широту, і довготу.";
     return;
   }
-  // Звичне місце: сервер візьме його, лише якщо в EXIF немає GPS
+  appendHome(fd);
+  const rememberNew = (form.elements.namedItem("remember") as HTMLInputElement).checked && val("lat") && val("lon")
+    ? { lat: Number(val("lat")), lon: Number(val("lon")), elevation_m: val("elevation_m") ? Number(val("elevation_m")) : null }
+    : null;
+
+  const btn = $<HTMLButtonElement>("#btn-send");
+  btn.disabled = true;
+  try {
+    await upload(fd);
+    if (rememberNew) setHome(rememberNew);
+    form.reset();
+    initTzSelect();
+    renderLocHint();
+    setFile(null);
+  } catch (err) {
+    $("#up-error").textContent = (err as Error).message;
+    btn.disabled = false;
+  }
+});
+
+/** Додати до форми звичне місце: сервер візьме його, лише якщо в EXIF немає GPS. */
+function appendHome(fd: FormData) {
   const home = getHome();
   if (home) {
     fd.append("fallback_lat", String(home.lat));
     fd.append("fallback_lon", String(home.lon));
     if (home.elevation_m != null) fd.append("fallback_elevation_m", String(home.elevation_m));
   }
-  const rememberNew = (form.elements.namedItem("remember") as HTMLInputElement).checked && val("lat") && val("lon")
-    ? { lat: Number(val("lat")), lon: Number(val("lon")), elevation_m: val("elevation_m") ? Number(val("elevation_m")) : null }
-    : null;
+}
 
-  const btn = $<HTMLButtonElement>("#btn-send");
+async function upload(fd: FormData) {
   const bar = $("#up-progress");
-  btn.disabled = true;
+  const rail = $(".rail-add");
   bar.hidden = false;
+  rail.classList.add("busy");
   try {
-    const job = await api.upload(fd, (p) => bar.style.setProperty("--p", String(p)));
-    if (rememberNew) setHome(rememberNew);
-    form.reset();
-    initTzSelect();
-    renderLocHint();
-    setFile(null);
+    const job = await api.upload(fd, (p) => {
+      bar.style.setProperty("--p", String(p));
+      rail.style.setProperty("--p", String(p));
+    });
     location.hash = `#/${job.id}`;
     refreshJobs();
-  } catch (err) {
-    $("#up-error").textContent = (err as Error).message;
-    btn.disabled = false;
   } finally {
     bar.hidden = true;
     bar.style.setProperty("--p", "0");
+    rail.classList.remove("busy");
+    rail.style.setProperty("--p", "0");
   }
+}
+
+/** Одразу завантажити файл без форми (смужка, перетягування, кнопка на головній).
+ *  Час і місце, якщо треба, можна вказати вже на сторінці результату. */
+async function quickUpload(f: File) {
+  const fd = new FormData();
+  fd.append("file", f);
+  appendHome(fd);
+  toast(`Завантажую ${f.name}…`);
+  try {
+    await upload(fd);
+  } catch (err) {
+    toast((err as Error).message, "error");
+  }
+}
+
+const railFile = $<HTMLInputElement>("#rail-file");
+railFile.addEventListener("change", () => {
+  const f = railFile.files?.[0];
+  railFile.value = "";
+  if (f) quickUpload(f);
 });
 
 $("#btn-geo").addEventListener("click", async () => {
@@ -305,6 +426,11 @@ window.addEventListener("drop", (e) => {
   overlay.hidden = true;
   const f = e.dataTransfer?.files[0];
   if (!f) return;
+  // Форму не видно — завантажити одразу; інакше покласти файл у форму, щоб дописати час і місце
+  if (!ui.side || narrow.matches) {
+    quickUpload(f);
+    return;
+  }
   const dt = new DataTransfer();
   dt.items.add(f);
   fileInput.files = dt.files;
@@ -340,7 +466,11 @@ window.addEventListener("keydown", (e) => {
   const k = e.key.toLowerCase();
   if (k === "n") return setNight(!document.documentElement.classList.contains("night"));
   if (k === "?") return help.showModal();
+  if (k === "[") return setSide(!ui.side);
+  if (k === "escape" && narrow.matches && ui.side) return setSide(false);
   if (!current) return;
+  if (k === "]") return setPanel(!ui.panel);
+  if (k === "f") return toggleFullscreen();
   const v = current.viewer;
   if (k === "+" || k === "=") v.zoomBy(1.6);
   else if (k === "-") v.zoomBy(1 / 1.6);
@@ -354,6 +484,7 @@ window.addEventListener("keydown", (e) => {
 
 // ---------------------------------------------------------------- старт
 
+applyLayout();
 startStarfield($<HTMLCanvasElement>("#starfield"));
 initTzSelect();
 renderLocHint();
