@@ -23,8 +23,9 @@ ASTRO_CATALOG_DIR=./catalog python -m astro_search.cli photo.jpg --time 2024-11-
 
 - Frontend with hot reload: run the server, then `cd frontend && npm run dev` (Vite at `http://localhost:5173/static/`, `/api` proxied to `127.0.0.1:8080` or `$ASTRO_API`).
 - Type-check the frontend: `cd frontend && npm run typecheck`. `npm run build` type-checks too.
+- Unit tests (no catalog or network needed): `pip install -r requirements-dev.txt && python -m pytest`. Run a single test with `python -m pytest tests/test_distortion.py::test_choose_prefers_plain_tan_without_distortion`. They cover projection helpers, the distortion fit and model choice, location priority and observation warnings, and API parameter validation.
 - Accuracy check after touching detection, solving or refinement: `ASTRO_CATALOG_DIR=./catalog python scripts/check_accuracy.py`. It renders 16 synthetic frames from known WCS (no distortion, barrel, the wavy distortion of a Galaxy S24 Ultra, narrow field; stars everywhere, in one half, one quarter, bright only), runs detection → tetra3rs → refine and measures error over the whole frame, including the empty parts. It exits 1 if any case leaves its threshold in `LIMITS`.
-- There is no unit-test suite and no configured linter.
+- There is no configured linter.
 - Docker: `docker build -t astro-search .` and `docker run --rm -p 127.0.0.1:8080:8080 -v astro-search-data:/data astro-search`. Docker Hub is blocked from the Claude cloud environment, so the image cannot be built there; verify the steps by running them directly (venv, `prepare_data.py`, `scripts/entrypoint.sh`).
 
 Configuration is env vars, all `ASTRO_*`, read in `astro_search/config.py`. The README has the full table.
@@ -48,7 +49,7 @@ Configuration is env vars, all `ASTRO_*`, read in `astro_search/config.py`. The 
    - constellation lines (`sky.constellation_lines`): great-circle segments sampled and projected through the WCS, clipped to the frame.
 7. `_apply_observation` computes everything that depends on time and place: star alt/az, bodies (`sky.bodies`, JPL DE421, topocentric) and the horizon grid (`sky.horizontal`). Without a capture time these are left empty.
 
-Sky → pixel conversion must go through `solve.world2pix` (or `sky._project`, which also applies `solve.near_field`). Raw `wcs.all_world2pix` raises `NoConvergence` for the whole array as soon as one far-off point diverges under SIP.
+Sky ↔ pixel geometry lives in `projection.py`. Sky → pixel conversion must go through `projection.world2pix`, or `projection.project`, which also applies `near_field`. Raw `wcs.all_world2pix` raises `NoConvergence` for the whole array as soon as one far-off point diverges under SIP. The pixel scale comes from `projection.pixel_scale_deg`.
 
 ### Time and location
 
@@ -75,7 +76,7 @@ The source is recorded in `observation.location.source` (`user`/`exif`/`fallback
 
 `jobs.JobManager` keeps one job per directory under `ASTRO_DATA_DIR/jobs/<id>/`: `job.json`, the original, `preview.jpg` and `result.json`. Writes are atomic (tmp + `os.replace`).
 
-Processing runs one job at a time in a single-worker `ProcessPoolExecutor` using the `spawn` context. The worker is warmed up with the catalog, the tetra3 DB and the ephemeris. A crashed worker is recreated. Queued and running jobs are re-queued on restart. `reobserve` runs in a thread of the main process, so it does not wait behind the queue.
+Processing runs one job at a time in a single-worker `ProcessPoolExecutor` using the `spawn` context. The worker is warmed up by `pipeline.warmup`: catalog, constellation lines, the tetra3 DB and the ephemeris. A crashed worker is recreated. Queued and running jobs are re-queued on restart. `reobserve` runs in a thread of the main process, so it does not wait behind the queue.
 
 `server.py` serves `index.html` from `ASTRO_WEB_DIR` at `/` and the built assets at `/static/`.
 

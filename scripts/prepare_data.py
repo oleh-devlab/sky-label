@@ -98,6 +98,8 @@ def build_star_catalog(csv_text: str, out: Path) -> int:
     return len(cols["ra"])
 
 
+# Копія astro_search.projection.unit_vectors: у Docker цей скрипт запускається
+# раніше, ніж пакет astro_search потрапляє в образ, тож імпортувати його не можна.
 def _unit(ra_deg, dec_deg) -> np.ndarray:
     ra, dec = np.radians(ra_deg), np.radians(dec_deg)
     return np.column_stack([np.cos(dec) * np.cos(ra), np.cos(dec) * np.sin(ra), np.sin(dec)])

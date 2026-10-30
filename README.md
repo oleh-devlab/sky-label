@@ -55,6 +55,8 @@ ASTRO_CATALOG_DIR=./catalog python -m astro_search             # сервер н
 ASTRO_CATALOG_DIR=./catalog python -m astro_search.cli photo.dng --out result.json   # без сервера
 ```
 
+Тести без каталогу й мережі (геометрія, підгонка дисторсії, вибір місця, параметри API): `pip install -r requirements-dev.txt && python -m pytest`.
+
 Перевірка точності після змін у пошуку зір чи уточненні: `ASTRO_CATALOG_DIR=./catalog python scripts/check_accuracy.py` (синтетичні кадри з відомою «правдою»: без дисторсії, бочка, «хвиляста» дисторсія телефона, вузьке поле; зорі по всьому кадру, лише в половині чи чверті, лише яскраві; похибка рахується по всьому кадру, зокрема там, де зір немає; код 1, якщо щось поза порогами).
 
 Для роботи над сторінкою з гарячим перезавантаженням: запустіть сервер, а поруч `cd frontend && npm run dev` (Vite на `http://localhost:5173/static/`, запити `/api` йдуть на `127.0.0.1:8080`; інша адреса — через `ASTRO_API`).

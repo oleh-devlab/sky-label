@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,7 +12,7 @@ import numpy as np
 from PIL import Image
 
 from . import catalog as catalog_mod
-from . import sky, solve
+from . import projection, sky, solve
 from .config import Config
 from .ingest import load_image
 from .stars import detect
@@ -71,33 +72,32 @@ def _decimal_year(t: datetime) -> float:
     return t.year + (t - start) / (end - start)
 
 
+def warmup(cfg: Config) -> None:
+    """Завантажити заздалегідь усе, що кешується: каталог, лінії, базу tetra3rs, ефемериду."""
+    catalog_mod.load(cfg.catalog_dir)
+    catalog_mod.load_lines(cfg.catalog_dir)
+    if solve.tetra3_available(cfg.catalog_dir):
+        solve.load_tetra3(str(cfg.catalog_dir / "tetra3.db"))
+    sky.ephemeris()
+
+
+@contextmanager
+def _timed(timings: dict[str, float], key: str):
+    t0 = time.perf_counter()
+    yield
+    timings[key] = time.perf_counter() - t0
+
+
 def process(image_path: Path, preview_path: Path, cfg: Config, ov: Overrides | None = None) -> dict:
     ov = ov or Overrides()
     timings: dict[str, float] = {}
-    warnings: list[str] = []
 
-    t0 = time.perf_counter()
-    im = load_image(image_path)
-    Image.fromarray(im.preview).save(preview_path, "JPEG", quality=90)
-    timings["load_s"] = time.perf_counter() - t0
-
-    # --- час і місце
-    when, time_source = ov.time_utc, "user" if ov.time_utc else None
-    if when is None and im.meta.time_utc is not None:
-        when, time_source = im.meta.time_utc, "exif"
-    observation = {
-        "time_utc": when.isoformat() if when else None,
-        "time_source": time_source,
-        "location": _resolve_location(ov, im.meta, cfg),
-        "camera": im.meta.to_dict(),
-    }
-    observation["warnings"] = _observation_warnings(observation)
-    warnings.extend(observation["warnings"])
-
-    # --- зорі на кадрі
-    t0 = time.perf_counter()
-    dets = detect(im.gray, rgb=im.preview if im.kind == "raster" else None)
-    timings["detect_s"] = time.perf_counter() - t0
+    with _timed(timings, "load_s"):
+        im = load_image(image_path)
+        Image.fromarray(im.preview).save(preview_path, "JPEG", quality=90)
+    observation = _observation(ov, im.meta, cfg)
+    with _timed(timings, "detect_s"):
+        dets = detect(im.gray, rgb=im.preview if im.kind == "raster" else None)
 
     result = {
         "version": RESULT_VERSION,
@@ -110,42 +110,77 @@ def process(image_path: Path, preview_path: Path, cfg: Config, ov: Overrides | N
         "horizontal": None,
         "constellations": [],
         "detections": [[round(float(x), 2), round(float(y), 2), float(f)] for x, y, f, _ in dets],
-        "warnings": warnings,
+        "warnings": list(observation["warnings"]),
         "timings": timings,
     }
+    when = datetime.fromisoformat(observation["time_utc"]) if observation["time_utc"] else None
+    epoch = _decimal_year(when) if when else catalog_mod.J2000_YEAR
+    sol = _solve(dets, im, ov, cfg, epoch, result)
+    if sol is None:
+        return _finish(result)
+
+    W, H = im.width, im.height
+    cat = catalog_mod.load(cfg.catalog_dir)
+    result["solved"] = True
+    result["solution"] = solve.describe(sol, W, H)
+    result["stars"] = _label_stars(sol, cat, epoch, dets, W, H)
+    lines = catalog_mod.load_lines(cfg.catalog_dir)
+    if lines is not None:
+        # Лінії сузір'їв від часу й місця не залежать
+        with _timed(timings, "constellations_s"):
+            ra_all, dec_all = cat.positions_at(epoch)
+            result["constellations"] = sky.constellation_lines(sol.wcs, W, H, ra_all, dec_all, lines)
+    _apply_observation(result, sol.wcs, dets)
+    return _finish(result)
+
+
+def _observation(ov: Overrides, meta, cfg: Config) -> dict:
+    """Час (вручну → EXIF) і місце спостереження, дані камери, попередження про них."""
+    when, time_source = ov.time_utc, "user" if ov.time_utc else None
+    if when is None and meta.time_utc is not None:
+        when, time_source = meta.time_utc, "exif"
+    obs = {
+        "time_utc": when.isoformat() if when else None,
+        "time_source": time_source,
+        "location": _resolve_location(ov, meta, cfg),
+        "camera": meta.to_dict(),
+    }
+    obs["warnings"] = _observation_warnings(obs)
+    return obs
+
+
+def _solve(dets: np.ndarray, im, ov: Overrides, cfg: Config, epoch: float, result: dict) -> solve.Solution | None:
+    """Початковий розв'язок (tetra3rs → astrometry.net) і уточнення за каталогом.
+
+    Якщо не вдалося, дописує пояснення в result["warnings"] і повертає None.
+    """
+    warnings, timings = result["warnings"], result["timings"]
     if len(dets) < 6:
         warnings.append("Знайдено замало зір для розв'язання.")
-        return _finish(result)
-
-    # --- plate solving
-    t0 = time.perf_counter()
-    fov_hint = ov.fov_deg or solve.fov_hint_deg(im.meta.focal_length_35mm, im.width, im.height)
-    init = None
-    if solve.tetra3_available(cfg.catalog_dir):
-        init = solve.solve_tetra3(dets, im.width, im.height, cfg.catalog_dir, fov_hint)
-    if init is None and solve.astrometry_available():
-        init = solve.solve_astrometry(dets, im.width, im.height, fov_hint, cfg.astrometry_cpulimit_s)
-    timings["solve_s"] = time.perf_counter() - t0
+        return None
+    W, H = im.width, im.height
+    with _timed(timings, "solve_s"):
+        fov_hint = ov.fov_deg or solve.fov_hint_deg(im.meta.focal_length_35mm, W, H)
+        init = None
+        if solve.tetra3_available(cfg.catalog_dir):
+            init = solve.solve_tetra3(dets, W, H, cfg.catalog_dir, fov_hint)
+        if init is None and solve.astrometry_available():
+            init = solve.solve_astrometry(dets, W, H, fov_hint, cfg.astrometry_cpulimit_s)
     if init is None:
         warnings.append("Не вдалося визначити, куди дивилася камера.")
-        return _finish(result)
-
-    t0 = time.perf_counter()
-    cat = catalog_mod.load(cfg.catalog_dir)
-    epoch = _decimal_year(when) if when else catalog_mod.J2000_YEAR
-    sol = solve.refine(init, dets, cat, epoch, im.width, im.height)
-    timings["refine_s"] = time.perf_counter() - t0
+        return None
+    with _timed(timings, "refine_s"):
+        sol = solve.refine(init, dets, catalog_mod.load(cfg.catalog_dir), epoch, W, H)
     if sol is None:
         warnings.append(f"{init.solver} дав розв'язок, але його не підтвердили зорі каталогу.")
-        return _finish(result)
+    return sol
 
-    result["solved"] = True
-    result["solution"] = solve.describe(sol, im.width, im.height)
 
-    # --- підписи зір
+def _label_stars(sol: solve.Solution, cat, epoch: float, dets: np.ndarray, W: int, H: int) -> list[dict]:
+    """Зорі каталогу до LABEL_MAG_LIMIT у кадрі, з відповідною точкою кадру, якщо вона є."""
     bright = cat.mag <= LABEL_MAG_LIMIT
     ra_b, dec_b = cat.positions_at(epoch, bright)
-    sel, sx, sy = solve.stars_in_frame(sol.wcs, im.width, im.height, ra_b, dec_b)
+    sel, sx, sy = projection.stars_in_frame(sol.wcs, W, H, ra_b, dec_b)
     idx = np.nonzero(bright)[0][sel]
     matched = dict(zip(sol.matched_cat.tolist(), range(len(sol.matched_cat))))
     nearby = _nearby_detections(sol, idx, sx, sy, dets)
@@ -166,19 +201,7 @@ def process(image_path: Path, preview_path: Path, cfg: Config, ov: Overrides | N
             item["detection"] = nearby[int(i)]
         stars.append(item)
     stars.sort(key=lambda s: s["mag"])
-    result["stars"] = stars
-
-    # --- лінії сузір'їв (від часу не залежать)
-    lines = catalog_mod.load_lines(cfg.catalog_dir)
-    if lines is not None:
-        t0 = time.perf_counter()
-        ra_all, dec_all = cat.positions_at(epoch)
-        result["constellations"] = sky.constellation_lines(sol.wcs, im.width, im.height, ra_all, dec_all, lines)
-        timings["constellations_s"] = time.perf_counter() - t0
-
-    # --- висоти зір, планети, Місяць, горизонт
-    _apply_observation(result, sol.wcs, dets)
-    return _finish(result)
+    return stars
 
 
 def _apply_observation(result: dict, wcs, dets: np.ndarray) -> None:
@@ -219,9 +242,6 @@ def reobserve(result: dict, cfg: Config, time_utc: datetime | None = None,
     Розв'язок (WCS) береться з результату. Положення зір на кадрі рахувалися на епоху
     старого часу; власний рух за роки зсуває їх щонайбільше на кілька ″, тож їх не чіпаємо.
     """
-    from astropy.io import fits
-    from astropy.wcs import WCS
-
     if not result.get("solved"):
         raise ValueError("Кадр не розв'язано: висоти й планети рахувати нема від чого")
     obs = result["observation"]
@@ -241,12 +261,9 @@ def reobserve(result: dict, cfg: Config, time_utc: datetime | None = None,
     result["warnings"] = [w for w in result["warnings"]
                           if w not in old and not w.startswith(legacy)] + obs["warnings"]
 
-    header = fits.Header()
-    for k, v in result["solution"]["wcs_header"].items():
-        header[k] = v
     dets = np.array([d[:2] for d in result["detections"]], dtype=float).reshape(-1, 2)
     result["timings"] = dict(result["timings"])
-    _apply_observation(result, WCS(header), dets)
+    _apply_observation(result, projection.wcs_from_header(result["solution"]["wcs_header"]), dets)
     return _finish(result)
 
 
@@ -264,7 +281,7 @@ def _nearby_detections(sol, idx, sx, sy, dets) -> dict[int, dict]:
 
     if len(dets) == 0 or len(idx) == 0:
         return {}
-    scale = float(np.mean(solve.proj_plane_pixel_scales(sol.wcs.celestial))) * 3600
+    scale = projection.pixel_scale_deg(sol.wcs) * 3600
     rms_px = float(np.sqrt(np.mean(sol.residual_arcsec ** 2))) / scale
     radius = max(3.0, 5 * rms_px)
     d, n = cKDTree(dets[:, :2]).query(np.column_stack([sx, sy]), distance_upper_bound=radius)

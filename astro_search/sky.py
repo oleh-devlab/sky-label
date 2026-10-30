@@ -13,7 +13,7 @@ import numpy as np
 from astropy.wcs import WCS
 from scipy.spatial import cKDTree
 
-from .solve import near_field, world2pix
+from .projection import clip_polyline, in_frame, pixel_scale_deg, project, unit_vectors
 
 BODIES = [
     ("Mercury", "mercury"),
@@ -32,7 +32,8 @@ REFRACTION = {"temperature_C": 10.0, "pressure_mbar": 1010.0}
 
 
 @lru_cache(maxsize=1)
-def _ephemeris():
+def ephemeris():
+    """Шкала часу й ефемерида de421 (кешуються на весь процес)."""
     import warnings
 
     from skyfield.api import Loader
@@ -52,22 +53,8 @@ def _ephemeris():
 def _observer(lat: float, lon: float, elevation_m: float):
     from skyfield.api import wgs84
 
-    _, eph = _ephemeris()
+    _, eph = ephemeris()
     return eph["earth"] + wgs84.latlon(lat, lon, elevation_m=elevation_m)
-
-
-def _project(wcs: WCS, width: int, height: int, ra, dec) -> tuple[np.ndarray, np.ndarray]:
-    """Небо → пікселі; для точок далеко від кадру повертає NaN."""
-    ra, dec = np.atleast_1d(np.asarray(ra, float)), np.atleast_1d(np.asarray(dec, float))
-    x, y = np.full(ra.shape, np.nan), np.full(ra.shape, np.nan)
-    near = near_field(wcs, width, height, ra, dec)
-    if near.any():
-        x[near], y[near] = world2pix(wcs, ra[near], dec[near])
-    return x, y
-
-
-def _in_frame(x, y, width, height):
-    return np.isfinite(x) & np.isfinite(y) & (x >= 0) & (x <= width - 1) & (y >= 0) & (y <= height - 1)
 
 
 def bodies(wcs: WCS, width: int, height: int, when: datetime, lat: float, lon: float,
@@ -81,17 +68,17 @@ def bodies(wcs: WCS, width: int, height: int, when: datetime, lat: float, lon: f
     """
     from skyfield.magnitudelib import planetary_magnitude
 
-    ts, eph = _ephemeris()
+    ts, eph = ephemeris()
     t = ts.from_datetime(when)
     obs = _observer(lat, lon, elevation_m).at(t)
     tree = cKDTree(dets[:, :2]) if len(dets) else None
-    scale = float(np.mean(np.abs(np.linalg.eigvals(wcs.pixel_scale_matrix)))) * 3600
+    scale = pixel_scale_deg(wcs) * 3600
     out = []
     for name, key in BODIES:
         astrometric = obs.observe(eph[key])
         ra, dec, dist = astrometric.radec()
-        xs, ys = _project(wcs, width, height, ra._degrees, dec.degrees)
-        if not _in_frame(xs, ys, width, height)[0]:
+        xs, ys = project(wcs, width, height, ra._degrees, dec.degrees)
+        if not in_frame(xs, ys, width, height)[0]:
             continue
         x, y = float(xs[0]), float(ys[0])
         alt, az, _ = astrometric.apparent().altaz()
@@ -131,7 +118,7 @@ def star_altaz(ra_deg: np.ndarray, dec_deg: np.ndarray, when: datetime, lat: flo
     """Висота (без рефракції та з нею) і азимут для масиву зір."""
     from skyfield.api import Star
 
-    ts, _ = _ephemeris()
+    ts, _ = ephemeris()
     t = ts.from_datetime(when)
     app = _observer(lat, lon, elevation_m).at(t).observe(
         Star(ra_hours=np.asarray(ra_deg) / 15.0, dec_degrees=np.asarray(dec_deg))).apparent()
@@ -140,36 +127,20 @@ def star_altaz(ra_deg: np.ndarray, dec_deg: np.ndarray, when: datetime, lat: flo
     return alt.degrees, alt_r.degrees, az.degrees
 
 
-def _polylines(x, y, width, height):
-    """Розбиває ламану на шматки, що лежать у кадрі."""
-    ok = _in_frame(x, y, width, height)
-    lines, cur = [], []
-    for xi, yi, k in zip(x, y, ok):
-        if k:
-            cur.append([round(float(xi), 1), round(float(yi), 1)])
-        elif cur:
-            if len(cur) > 1:
-                lines.append(cur)
-            cur = []
-    if len(cur) > 1:
-        lines.append(cur)
-    return lines
-
-
 def horizontal(wcs: WCS, width: int, height: int, when: datetime, lat: float, lon: float,
                elevation_m: float) -> dict:
     """Куди дивився телефон і сітка висоти/азимута в піксельних координатах.
 
     Висоти геометричні (без рефракції); горизонт — висота 0°.
     """
-    ts, _ = _ephemeris()
+    ts, _ = ephemeris()
     t = ts.from_datetime(when)
     obs = _observer(lat, lon, elevation_m).at(t)
 
     def altaz_to_pix(alt, az):
         pos = obs.from_altaz(alt_degrees=np.asarray(alt, float), az_degrees=np.asarray(az, float))
         ra, dec, _ = pos.radec()
-        return _project(wcs, width, height, ra._degrees, dec.degrees)
+        return project(wcs, width, height, ra._degrees, dec.degrees)
 
     def pix_to_altaz(px, py):
         ra, dec = wcs.all_pix2world([px], [py], 0)
@@ -188,13 +159,13 @@ def horizontal(wcs: WCS, width: int, height: int, when: datetime, lat: float, lo
     az_dense = np.arange(0, 360.5, 0.5)
     for alt in range(0, 90, 10):
         x, y = altaz_to_pix(np.full_like(az_dense, alt), az_dense)
-        lines = _polylines(x, y, width, height)
+        lines = clip_polyline(x, y, width, height)
         if lines:
             grid.append({"kind": "alt", "value": alt, "lines": lines})
     alt_dense = np.arange(-5, 89.6, 0.5)
     for az in range(0, 360, 15):
         x, y = altaz_to_pix(alt_dense, np.full_like(alt_dense, az))
-        lines = _polylines(x, y, width, height)
+        lines = clip_polyline(x, y, width, height)
         if lines:
             grid.append({"kind": "az", "value": az, "lines": lines})
 
@@ -205,7 +176,7 @@ def horizontal(wcs: WCS, width: int, height: int, when: datetime, lat: float, lo
     g_alt, _, _ = star_altaz(g_ra, g_dec, when, lat, lon, elevation_m)
     lo, hi = float(np.min(g_alt)), float(np.max(g_alt))
     zx, zy = altaz_to_pix([90.0], [0.0])
-    if _in_frame(zx, zy, width, height)[0]:
+    if in_frame(zx, zy, width, height)[0]:
         hi = 90.0
     return {
         "center": {"alt_deg": round(c_alt, 3), "alt_refracted_deg": round(c_alt_r, 3),
@@ -225,8 +196,8 @@ def constellation_lines(wcs: WCS, width: int, height: int, ra: np.ndarray, dec: 
     дуга — пряма, але дисторсія SIP її вигинає, тож дуга береться з кроком ~1°.
     Підпис сузір'я ставиться в середину його зір, що потрапили в кадр.
     """
-    a_u = _unit_vec(ra[lines.a], dec[lines.a])
-    b_u = _unit_vec(ra[lines.b], dec[lines.b])
+    a_u = unit_vectors(ra[lines.a], dec[lines.a])
+    b_u = unit_vectors(ra[lines.b], dec[lines.b])
     omega = np.arccos(np.clip(np.einsum("ij,ij->i", a_u, b_u), -1, 1))
     n = 24
     t = np.linspace(0, 1, n)[None, :, None]
@@ -238,18 +209,18 @@ def constellation_lines(wcs: WCS, width: int, height: int, ra: np.ndarray, dec: 
     pts = pts.reshape(-1, 3)
     p_ra = np.degrees(np.arctan2(pts[:, 1], pts[:, 0])) % 360
     p_dec = np.degrees(np.arcsin(np.clip(pts[:, 2], -1, 1)))
-    x, y = _project(wcs, width, height, p_ra, p_dec)
+    x, y = project(wcs, width, height, p_ra, p_dec)
     x, y = x.reshape(-1, n), y.reshape(-1, n)
 
     out: dict[str, dict] = {}
     for k, con in enumerate(lines.con.tolist()):
-        segs = _polylines(x[k], y[k], width, height)
+        segs = clip_polyline(x[k], y[k], width, height)
         if not segs:
             continue
         item = out.setdefault(con, {"id": con, "lines": [], "stars": []})
         item["lines"] += segs
         for end in (0, n - 1):
-            if _in_frame(x[k, end], y[k, end], width, height):
+            if in_frame(x[k, end], y[k, end], width, height):
                 item["stars"].append((float(x[k, end]), float(y[k, end])))
     result = []
     for item in out.values():
@@ -259,7 +230,3 @@ def constellation_lines(wcs: WCS, width: int, height: int, ra: np.ndarray, dec: 
         result.append(item)
     return result
 
-
-def _unit_vec(ra_deg, dec_deg) -> np.ndarray:
-    ra, dec = np.radians(ra_deg), np.radians(dec_deg)
-    return np.column_stack([np.cos(dec) * np.cos(ra), np.cos(dec) * np.sin(ra), np.sin(dec)])

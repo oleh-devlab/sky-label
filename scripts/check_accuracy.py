@@ -23,7 +23,7 @@ import numpy as np
 from astropy.wcs import WCS, Sip
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from astro_search import catalog, config, solve  # noqa: E402
+from astro_search import catalog, config, projection, solve  # noqa: E402
 from astro_search.stars import detect  # noqa: E402
 
 W, H = 3000, 4000
@@ -72,8 +72,8 @@ def make_truth(kind: str) -> WCS:
 
 def render(truth: WCS, cat, ra, dec, mag_max: float) -> np.ndarray:
     rng = np.random.default_rng(1)
-    near = solve.near_field(truth, W, H, ra, dec) & (cat.mag <= mag_max)
-    x, y = solve.world2pix(truth, ra[near], dec[near])
+    near = projection.near_field(truth, W, H, ra, dec) & (cat.mag <= mag_max)
+    x, y = projection.world2pix(truth, ra[near], dec[near])
     img = rng.normal(40, 4, (H, W)).astype(np.float32)
     yy, xx = np.mgrid[-6:7, -6:7]
     for cx, cy, m in zip(x, y, cat.mag[near]):
@@ -89,8 +89,8 @@ def grid_error_px(wcs: WCS, truth: WCS) -> np.ndarray:
     xs, ys = np.meshgrid(np.linspace(0, W - 1, 31), np.linspace(0, H - 1, 41))
     r1, d1 = wcs.all_pix2world(xs.ravel(), ys.ravel(), 0)
     r2, d2 = truth.all_pix2world(xs.ravel(), ys.ravel(), 0)
-    cos = np.einsum("ij,ij->i", solve._unit(r1, d1), solve._unit(r2, d2))
-    scale = float(np.mean(solve.proj_plane_pixel_scales(truth.celestial)))
+    cos = np.einsum("ij,ij->i", projection.unit_vectors(r1, d1), projection.unit_vectors(r2, d2))
+    scale = projection.pixel_scale_deg(truth)
     return np.degrees(np.arccos(np.clip(cos, -1, 1))) / scale
 
 

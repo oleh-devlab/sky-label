@@ -27,12 +27,13 @@ import numpy as np
 from astropy.coordinates import SkyCoord
 from astropy.table import Table
 from astropy.wcs import WCS
-from astropy.wcs.utils import fit_wcs_from_points, proj_plane_pixel_scales
+from astropy.wcs.utils import fit_wcs_from_points
 import astropy.units as u
 from scipy.spatial import cKDTree
 
 from . import distortion
 from .catalog import StarCatalog
+from .projection import frame_center, pixel_scale_deg, stars_in_frame
 
 T3_CENTROIDS = 80
 # Крок ~1,25×: tetra3rs знаходить розв'язок, якщо оцінка поля в межах приблизно −30…+30 %.
@@ -78,7 +79,8 @@ def _fov_candidates(hint: float | None) -> list[float]:
 
 
 @lru_cache(maxsize=1)
-def _tetra3_db(path: str):
+def load_tetra3(path: str):
+    """База tetra3rs (кешується: її завантаження — найдовша частина старту)."""
     import tetra3rs
 
     return tetra3rs.SolverDatabase.load_from_file(path)
@@ -101,20 +103,9 @@ def _wcs_from_mapping(pix2world, width: int, height: int) -> WCS:
     return fit_wcs_from_points((xs[ok], ys[ok]), sky, proj_point=center, projection="TAN")
 
 
-def _frame_center(wcs: WCS, width: int, height: int) -> SkyCoord:
-    """Точка неба в центрі кадру — точка дотику для проєкції TAN.
-
-    proj_point="center" у fit_wcs_from_points усереднює координати зір, і біля
-    полюса світу (RA перескакує 0°/360°) центр опиняється деінде на небі:
-    частина зір тоді виходить за межі проєкції, і підгонка падає на NaN.
-    """
-    ra, dec = wcs.all_pix2world([[width / 2, height / 2]], 0)[0]
-    return SkyCoord(ra * u.deg, dec * u.deg)
-
-
 def solve_tetra3(dets: np.ndarray, width: int, height: int, catalog_dir: Path,
                  fov_hint: float | None) -> InitialSolution | None:
-    db = _tetra3_db(str(Path(catalog_dir) / "tetra3.db"))
+    db = load_tetra3(str(Path(catalog_dir) / "tetra3.db"))
     d = dets[:T3_CENTROIDS]
     cents = np.column_stack([d[:, 0] - width / 2, d[:, 1] - height / 2, d[:, 2]])
     t0 = time.perf_counter()
@@ -199,63 +190,6 @@ def solve_astrometry(dets: np.ndarray, width: int, height: int, fov_hint: float 
 # ------------------------------------------------------------ уточнення
 
 
-def _unit(ra_deg, dec_deg):
-    ra, dec = np.radians(ra_deg), np.radians(dec_deg)
-    return np.column_stack([np.cos(dec) * np.cos(ra), np.cos(dec) * np.sin(ra), np.sin(dec)])
-
-
-def world2pix(wcs: WCS, ra, dec) -> tuple[np.ndarray, np.ndarray]:
-    """Небо → пікселі, що не падає на розбіжності.
-
-    Обернене перетворення з SIP шукається ітераціями, і для точок, де поліном
-    дисторсії вже не описує кадр (кути, далеко за краєм), вони розбігаються:
-    astropy тоді кидає NoConvergence на весь масив. Тут такі точки стають NaN,
-    а решта лишається. Кожну відповідь перевіряємо прямим перетворенням.
-    """
-    ra = np.atleast_1d(np.asarray(ra, float))
-    dec = np.atleast_1d(np.asarray(dec, float))
-    if ra.size == 0:
-        return np.zeros(0), np.zeros(0)
-    x, y = (np.asarray(v, float) for v in wcs.all_world2pix(ra, dec, 0, quiet=True))
-    ok = np.isfinite(x) & np.isfinite(y)
-    if ok.any():
-        r2, d2 = wcs.all_pix2world(x[ok], y[ok], 0)
-        cos_sep = np.einsum("ij,ij->i", _unit(ra[ok], dec[ok]), _unit(r2, d2))
-        sep_px = np.degrees(np.arccos(np.clip(cos_sep, -1, 1))) / float(np.mean(proj_plane_pixel_scales(wcs.celestial)))
-        good = np.isfinite(sep_px) & (sep_px < 0.5)
-        ok[np.nonzero(ok)[0][~good]] = False
-    x[~ok] = np.nan
-    y[~ok] = np.nan
-    return x, y
-
-
-def near_field(wcs: WCS, width: int, height: int, ra, dec) -> np.ndarray:
-    """Маска точок неба поблизу кадру.
-
-    Проєкцію (особливо з SIP) можна застосовувати лише біля кадру:
-    для далеких точок обернене перетворення розбігається.
-    """
-    c_ra, c_dec = wcs.all_pix2world([[width / 2, height / 2]], 0)[0]
-    corners = wcs.all_pix2world([[0, 0], [width - 1, 0], [0, height - 1], [width - 1, height - 1]], 0)
-    center = SkyCoord(c_ra * u.deg, c_dec * u.deg)
-    radius = max(center.separation(SkyCoord(r * u.deg, d * u.deg)).deg for r, d in corners) * 1.15
-    cos_sep = _unit(ra, dec) @ _unit([c_ra], [c_dec])[0]
-    return cos_sep > math.cos(math.radians(min(radius, 89.0)))
-
-
-def stars_in_frame(wcs: WCS, width: int, height: int, ra: np.ndarray, dec: np.ndarray,
-                   margin: float = 0.0) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Індекси зір, що потрапляють у кадр, і їхні піксельні координати."""
-    near = np.nonzero(near_field(wcs, width, height, ra, dec))[0]
-    if near.size == 0:
-        return near, np.zeros(0), np.zeros(0)
-    x, y = world2pix(wcs, ra[near], dec[near])
-    m = margin * max(width, height)
-    inside = (np.isfinite(x) & np.isfinite(y) & (x >= -m) & (x <= width - 1 + m)
-              & (y >= -m) & (y <= height - 1 + m))
-    return near[inside], x[inside], y[inside]
-
-
 def _match(cx, cy, dets_xy, radius) -> tuple[np.ndarray, np.ndarray]:
     """Взаємно найближчі пари каталог ↔ виявлена точка в межах радіуса."""
     if len(cx) == 0 or len(dets_xy) == 0:
@@ -317,8 +251,7 @@ def refine(init: InitialSolution, dets: np.ndarray, cat: StarCatalog, epoch_year
         if len(ci_local) < 6:
             return None
         ci = sel[ci_local]
-        c0 = _frame_center(wcs, width, height)
-        ra0, dec0 = float(c0.ra.deg), float(c0.dec.deg)
+        ra0, dec0 = frame_center(wcs, width, height)
 
         def fit_and_res(model):
             pf = distortion.fit(det_xy[dj, 0], det_xy[dj, 1], ra_all[ci], dec_all[ci],
@@ -360,7 +293,7 @@ def describe(sol: Solution, width: int, height: int) -> dict:
     right = w.pixel_to_world(width - 1, height / 2)
     top = w.pixel_to_world(width / 2, 0)
     bottom = w.pixel_to_world(width / 2, height - 1)
-    scale = float(np.mean(proj_plane_pixel_scales(w.celestial))) * 3600
+    scale = pixel_scale_deg(w) * 3600
     r = sol.residual_arcsec
     hdr = w.to_header(relax=True)
     return {

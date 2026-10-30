@@ -58,13 +58,9 @@ def _worker_init(cfg: Config) -> None:
 
 
 def _worker_warmup() -> None:
-    """Завантажити каталог, базу tetra3rs і ефемериду заздалегідь."""
-    from . import catalog, sky, solve
+    from .pipeline import warmup
 
-    catalog.load(_worker_cfg.catalog_dir)
-    if solve.tetra3_available(_worker_cfg.catalog_dir):
-        solve._tetra3_db(str(_worker_cfg.catalog_dir / "tetra3.db"))
-    sky._ephemeris()
+    warmup(_worker_cfg)
 
 
 def _worker_run(job_dir: str, original: str, params: dict) -> None:
