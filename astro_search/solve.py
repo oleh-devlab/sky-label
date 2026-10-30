@@ -190,6 +190,31 @@ def _unit(ra_deg, dec_deg):
     return np.column_stack([np.cos(dec) * np.cos(ra), np.cos(dec) * np.sin(ra), np.sin(dec)])
 
 
+def world2pix(wcs: WCS, ra, dec) -> tuple[np.ndarray, np.ndarray]:
+    """Небо → пікселі, що не падає на розбіжності.
+
+    Обернене перетворення з SIP шукається ітераціями, і для точок, де поліном
+    дисторсії вже не описує кадр (кути, далеко за краєм), вони розбігаються:
+    astropy тоді кидає NoConvergence на весь масив. Тут такі точки стають NaN,
+    а решта лишається. Кожну відповідь перевіряємо прямим перетворенням.
+    """
+    ra = np.atleast_1d(np.asarray(ra, float))
+    dec = np.atleast_1d(np.asarray(dec, float))
+    if ra.size == 0:
+        return np.zeros(0), np.zeros(0)
+    x, y = (np.asarray(v, float) for v in wcs.all_world2pix(ra, dec, 0, quiet=True))
+    ok = np.isfinite(x) & np.isfinite(y)
+    if ok.any():
+        r2, d2 = wcs.all_pix2world(x[ok], y[ok], 0)
+        cos_sep = np.einsum("ij,ij->i", _unit(ra[ok], dec[ok]), _unit(r2, d2))
+        sep_px = np.degrees(np.arccos(np.clip(cos_sep, -1, 1))) / float(np.mean(proj_plane_pixel_scales(wcs.celestial)))
+        good = np.isfinite(sep_px) & (sep_px < 0.5)
+        ok[np.nonzero(ok)[0][~good]] = False
+    x[~ok] = np.nan
+    y[~ok] = np.nan
+    return x, y
+
+
 def near_field(wcs: WCS, width: int, height: int, ra, dec) -> np.ndarray:
     """Маска точок неба поблизу кадру.
 
@@ -210,7 +235,7 @@ def stars_in_frame(wcs: WCS, width: int, height: int, ra: np.ndarray, dec: np.nd
     near = np.nonzero(near_field(wcs, width, height, ra, dec))[0]
     if near.size == 0:
         return near, np.zeros(0), np.zeros(0)
-    x, y = wcs.all_world2pix(ra[near], dec[near], 0)
+    x, y = world2pix(wcs, ra[near], dec[near])
     m = margin * max(width, height)
     inside = (np.isfinite(x) & np.isfinite(y) & (x >= -m) & (x <= width - 1 + m)
               & (y >= -m) & (y <= height - 1 + m))
@@ -261,10 +286,12 @@ def refine(init: InitialSolution, dets: np.ndarray, cat: StarCatalog, epoch_year
             sip = 3 if n >= 60 else 2 if n >= 20 else None
             wcs = fit_wcs_from_points((det_xy[dj, 0], det_xy[dj, 1]), sky,
                                       proj_point="center", projection="TAN", sip_degree=sip)
-            px, py = wcs.all_world2pix(ra_all[ci], dec_all[ci], 0)
+            px, py = world2pix(wcs, ra_all[ci], dec_all[ci])
             res = np.hypot(px - det_xy[dj, 0], py - det_xy[dj, 1])
-            rms = float(np.sqrt(np.mean(res ** 2)))
-            keep = res <= max(3 * rms, 1.0)
+            if not np.isfinite(res).any():
+                return None
+            rms = float(np.sqrt(np.nanmean(res ** 2)))
+            keep = np.isfinite(res) & (res <= max(3 * rms, 1.0))
             if keep.all() or keep.sum() < 6 or clip == 2:
                 break
             # відкинути викиди (хибні пари) і підігнати ще раз

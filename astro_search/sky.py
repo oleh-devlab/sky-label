@@ -13,7 +13,7 @@ import numpy as np
 from astropy.wcs import WCS
 from scipy.spatial import cKDTree
 
-from .solve import near_field
+from .solve import near_field, world2pix
 
 BODIES = [
     ("Mercury", "mercury"),
@@ -62,7 +62,7 @@ def _project(wcs: WCS, width: int, height: int, ra, dec) -> tuple[np.ndarray, np
     x, y = np.full(ra.shape, np.nan), np.full(ra.shape, np.nan)
     near = near_field(wcs, width, height, ra, dec)
     if near.any():
-        x[near], y[near] = wcs.all_world2pix(ra[near], dec[near], 0)
+        x[near], y[near] = world2pix(wcs, ra[near], dec[near])
     return x, y
 
 
@@ -179,7 +179,7 @@ def horizontal(wcs: WCS, width: int, height: int, when: datetime, lat: float, lo
     c_alt, c_alt_r, c_az = pix_to_altaz(width / 2, height / 2)
     # Куди на кадрі вказує зеніт: кут від напрямку «вгору» за годинниковою стрілкою
     zx, zy = altaz_to_pix(min(c_alt + 1.0, 89.9), c_az)
-    if c_alt + 1.0 >= 89.9:
+    if c_alt + 1.0 >= 89.9 or not (np.isfinite(zx[0]) and np.isfinite(zy[0])):
         zenith_angle = None
     else:
         zenith_angle = float(np.degrees(np.arctan2(zx[0] - width / 2, height / 2 - zy[0]))) % 360
