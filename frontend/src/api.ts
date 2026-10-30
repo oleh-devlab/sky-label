@@ -38,7 +38,8 @@ export interface Star {
   y: number;
   ra_deg: number;
   dec_deg: number;
-  detection: { index: number; offset_arcsec: number } | null;
+  /** in_fit: false — точка поруч є, але в підгонку не ввійшла (пересвічена, подвійна). */
+  detection: { index: number; offset_arcsec: number; in_fit?: boolean } | null;
   alt_deg?: number;
   alt_refracted_deg?: number;
   az_deg?: number;
@@ -75,6 +76,12 @@ export interface Solution {
   matched_stars: number;
   residual_arcsec: { rms: number; median: number; p90: number; max: number };
   sip_order: number | null;
+  /** Модель дисторсії й похибка на зорях, яких підгонка не бачила (у старих результатах немає). */
+  distortion?: {
+    model: string;
+    cv_rms_arcsec: number | null;
+    candidates: { model: string; cv_rms_arcsec: number; chosen: boolean }[];
+  };
   wcs_header: Record<string, string | number | boolean>;
 }
 

@@ -203,7 +203,14 @@ export class ResultPanel {
         stat("rms", arc(res.rms)), stat("медіана", arc(res.median)), stat("90 %", arc(res.p90)), stat("макс.", arc(res.max))),
     ];
 
-    const offs = this.r.stars.filter((st) => st.detection).map((st) => st.detection!.offset_arcsec);
+    const dist = sol.distortion;
+    if (dist?.cv_rms_arcsec != null) {
+      out.push(h("h4", {}, "Модель кадру"),
+        h("p.small.muted", {}, "Кілька моделей дисторсії об'єктива перевірено на зорях, яких підгонка не бачила. Обрано найпростішу з тих, що не помітно гірші за найкращу."),
+        modelChart(dist.candidates, sol.scale_arcsec_per_px));
+    }
+
+    const offs = this.r.stars.filter((st) => st.detection && st.detection.in_fit !== false).map((st) => st.detection!.offset_arcsec);
     if (offs.length > 2) out.push(h("h4", {}, "Відхилення зір від каталогу"), histogram(offs, res.median));
 
     if (this.r.bodies.some((b) => b.nearest_detection)) {
@@ -216,7 +223,8 @@ export class ResultPanel {
 
     out.push(h("h4", {}, "Розв'язання"), h("dl.kv", {},
       kv("Розв'язувач", sol.solver, `${num(sol.solve_ms, 0)} мс`),
-      kv("Модель", sol.sip_order ? `TAN-SIP, порядок ${sol.sip_order}` : "TAN"),
+      kv("Модель", dist ? dist.model : sol.sip_order ? `TAN-SIP, порядок ${sol.sip_order}` : "TAN"),
+      dist?.cv_rms_arcsec != null ? kv("Похибка на нових зорях", arc(dist.cv_rms_arcsec), "перехресна перевірка") : null,
       kv("Напрямок «вгору»", `${num(sol.up_position_angle_deg, 1)}° від півночі через схід`),
     ));
 
@@ -307,6 +315,18 @@ function histogram(values: number[], median: number): SVGSVGElement {
     s("text", { x: String(W), y: String(H + 13), "text-anchor": "end" }, arc(max)),
     s("text", { x: (mx + 4).toFixed(1), y: "10", class: "median-l" }, `медіана ${arc(median)}`),
   );
+}
+
+/** Похибка кожної моделі на перехресній перевірці (логарифмічна шкала: різниця буває в рази). */
+function modelChart(cands: { model: string; cv_rms_arcsec: number; chosen: boolean }[], scale: number): HTMLElement {
+  const vals = cands.map((c) => c.cv_rms_arcsec);
+  const lo = Math.log(Math.min(...vals) * 0.8);
+  const hi = Math.log(Math.max(...vals));
+  return h("div.models", {}, cands.map((c) =>
+    h(`div.model${c.chosen ? ".chosen" : ""}`, { title: `${num(c.cv_rms_arcsec / scale, 2)} px` },
+      h("span", {}, c.model),
+      h("i", { style: `--w:${(((Math.log(c.cv_rms_arcsec) - lo) / (hi - lo || 1)) * 100).toFixed(1)}%` }),
+      h("b", {}, arc(c.cv_rms_arcsec)))));
 }
 
 function fitsHeader(hdr: Record<string, string | number | boolean>): string {

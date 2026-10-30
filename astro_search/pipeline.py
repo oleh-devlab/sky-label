@@ -126,6 +126,7 @@ def process(image_path: Path, preview_path: Path, cfg: Config, ov: Overrides | N
     sel, sx, sy = solve.stars_in_frame(sol.wcs, im.width, im.height, ra_b, dec_b)
     idx = np.nonzero(bright)[0][sel]
     matched = dict(zip(sol.matched_cat.tolist(), range(len(sol.matched_cat))))
+    nearby = _nearby_detections(sol, idx, sx, sy, dets)
     if when is not None and len(idx):
         alt, alt_r, az = sky.star_altaz(ra_b[sel], dec_b[sel], when, lat, lon, elev)
     stars = []
@@ -139,7 +140,10 @@ def process(image_path: Path, preview_path: Path, cfg: Config, ov: Overrides | N
         m = matched.get(int(i))
         if m is not None:
             j = int(sol.matched_det[m])
-            item["detection"] = {"index": j, "offset_arcsec": round(float(sol.residual_arcsec[m]), 1)}
+            item["detection"] = {"index": j, "offset_arcsec": round(float(sol.residual_arcsec[m]), 1),
+                                 "in_fit": True}
+        elif int(i) in nearby:
+            item["detection"] = nearby[int(i)]
         if when is not None:
             item.update({"alt_deg": round(float(alt[k]), 3), "alt_refracted_deg": round(float(alt_r[k]), 3),
                          "az_deg": round(float(az[k]), 3)})
@@ -162,6 +166,29 @@ def process(image_path: Path, preview_path: Path, cfg: Config, ov: Overrides | N
         result["horizontal"] = sky.horizontal(sol.wcs, im.width, im.height, when, lat, lon, elev)
         timings["sky_s"] = time.perf_counter() - t0
     return _finish(result)
+
+
+def _nearby_detections(sol, idx, sx, sy, dets) -> dict[int, dict]:
+    """Точки кадру біля зір, що не ввійшли в підгонку.
+
+    Підгонка бере лише надійні пари й відкидає викиди. Найяскравіші зорі на фото
+    телефона часто пересвічені, і їхній центр зсунутий на 2–3 px: для моделі це
+    викид, але сама зоря на кадрі є, і показувати її «не знайденою» неправильно.
+    Тісні подвійні зливаються в одну пляму, тож одна точка може належати кільком
+    зорям каталогу. Випадковий збіг у межах кількох пікселів малоймовірний
+    (сотні точок на мільйони пікселів).
+    """
+    from scipy.spatial import cKDTree
+
+    if len(dets) == 0 or len(idx) == 0:
+        return {}
+    scale = float(np.mean(solve.proj_plane_pixel_scales(sol.wcs.celestial))) * 3600
+    rms_px = float(np.sqrt(np.mean(sol.residual_arcsec ** 2))) / scale
+    radius = max(3.0, 5 * rms_px)
+    d, n = cKDTree(dets[:, :2]).query(np.column_stack([sx, sy]), distance_upper_bound=radius)
+    fit_set = set(sol.matched_cat.tolist())
+    return {int(i): {"index": int(n[k]), "offset_arcsec": round(float(d[k] * scale), 1), "in_fit": False}
+            for k, i in enumerate(idx) if int(i) not in fit_set and np.isfinite(d[k])}
 
 
 def _finish(result: dict) -> dict:

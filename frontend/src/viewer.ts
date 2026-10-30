@@ -514,7 +514,11 @@ export class Viewer {
       rows.push(["Зоряна величина", `${num(st.mag, 2)}m`]);
       rows.push(["α / δ (J2000)", `${hms(st.ra_deg)}  ${dms(st.dec_deg)}`]);
       if (st.alt_refracted_deg != null) rows.push(["Висота / азимут", `${num(st.alt_refracted_deg, 2)}° · ${num(st.az_deg!, 1)}° ${compass(st.az_deg!)}`]);
-      rows.push(["На кадрі", st.detection ? h("span.ok", {}, `знайдена, відхилення ${arc(st.detection.offset_arcsec)}`) : h("span.muted", {}, "не знайдена серед точок")]);
+      rows.push(["На кадрі", !st.detection ? h("span.muted", {}, "не знайдена серед точок")
+        : st.detection.in_fit === false
+          ? h("span", {}, h("span.ok", {}, `знайдена, відхилення ${arc(st.detection.offset_arcsec)}`), h("br"),
+            h("small.muted", {}, "у підгонку не ввійшла: пересвічена або тісна подвійна"))
+          : h("span.ok", {}, `знайдена, відхилення ${arc(st.detection.offset_arcsec)}`)]);
       const ids = [st.hip ? `HIP ${st.hip}` : null, st.hr ? `HR ${st.hr}` : null].filter(Boolean).join(" · ");
       if (ids) rows.push(["Каталоги", ids]);
     } else {

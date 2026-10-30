@@ -5,7 +5,7 @@
 - astrometry.net (solve-field) — запасний, якщо tetra3rs не впорався.
 
 Далі refine() уточнює розв'язок за власним каталогом (HYG):
-зіставляє зорі з виявленими точками і підганяє TAN-SIP (з дисторсією),
+зіставляє зорі з виявленими точками і підганяє TAN-SIP (з дисторсією, див. distortion.py),
 тож точність і звіт однакові незалежно від того, який розв'язувач спрацював.
 """
 
@@ -31,6 +31,7 @@ from astropy.wcs.utils import fit_wcs_from_points, proj_plane_pixel_scales
 import astropy.units as u
 from scipy.spatial import cKDTree
 
+from . import distortion
 from .catalog import StarCatalog
 
 T3_CENTROIDS = 80
@@ -276,6 +277,12 @@ class Solution:
     matched_cat: np.ndarray      # індекси в каталозі
     matched_det: np.ndarray      # індекси у списку виявлених точок
     residual_arcsec: np.ndarray
+    model: distortion.Model = (1, ())
+    # Похибка на зорях, яких підгонка не бачила (″), для кожної розглянутої моделі
+    cv_arcsec: dict | None = None
+
+
+REFINE_ITERATIONS = 5
 
 
 def refine(init: InitialSolution, dets: np.ndarray, cat: StarCatalog, epoch_year: float,
@@ -286,22 +293,24 @@ def refine(init: InitialSolution, dets: np.ndarray, cat: StarCatalog, epoch_year
     det_xy = dets[:, :2]
     wcs = init.wcs
     radius = max(8.0, 0.006 * math.hypot(width, height))
-    ci = dj = None
-    for _ in range(4):
+    model: distortion.Model = (1, ())
+    scores: dict = {}
+    for it in range(REFINE_ITERATIONS):
         sel, cx, cy = stars_in_frame(wcs, width, height, ra_all, dec_all)
         ci_local, dj = _match(cx, cy, det_xy, radius)
         if len(ci_local) < 6:
             return None
         ci = sel[ci_local]
-        sky = SkyCoord(ra_all[ci] * u.deg, dec_all[ci] * u.deg)
-        for clip in range(3):
+        c0 = _frame_center(wcs, width, height)
+        ra0, dec0 = float(c0.ra.deg), float(c0.dec.deg)
+        if it == 0:
+            # Поки пари ненадійні — модель за кількістю зір, як і раніше
             n = len(ci)
-            sip = 3 if n >= 60 else 2 if n >= 20 else None
-            wcs = fit_wcs_from_points((det_xy[dj, 0], det_xy[dj, 1]), sky,
-                                      proj_point=_frame_center(wcs, width, height),
-                                      projection="TAN", sip_degree=sip)
-            px, py = world2pix(wcs, ra_all[ci], dec_all[ci])
-            res = np.hypot(px - det_xy[dj, 0], py - det_xy[dj, 1])
+            model = (3, ()) if n >= 60 else (2, ()) if n >= 20 else (1, ())
+        for clip in range(3):
+            pf = distortion.fit(det_xy[dj, 0], det_xy[dj, 1], ra_all[ci], dec_all[ci],
+                                width, height, ra0, dec0, model)
+            res = distortion.residuals_px(pf, det_xy[dj, 0], det_xy[dj, 1], ra_all[ci], dec_all[ci])
             if not np.isfinite(res).any():
                 return None
             rms = float(np.sqrt(np.nanmean(res ** 2)))
@@ -309,14 +318,25 @@ def refine(init: InitialSolution, dets: np.ndarray, cat: StarCatalog, epoch_year
             if keep.all() or keep.sum() < 6 or clip == 2:
                 break
             # відкинути викиди (хибні пари) і підігнати ще раз
-            ci, dj, sky = ci[keep], dj[keep], sky[keep]
+            ci, dj = ci[keep], dj[keep]
+        if it >= 1:
+            # Пари вже надійні: модель дисторсії обирає перехресна перевірка
+            model, scores = distortion.choose(det_xy[dj, 0], det_xy[dj, 1], ra_all[ci], dec_all[ci],
+                                              width, height, ra0, dec0)
+            pf = distortion.fit(det_xy[dj, 0], det_xy[dj, 1], ra_all[ci], dec_all[ci],
+                                width, height, ra0, dec0, model)
+            res = distortion.residuals_px(pf, det_xy[dj, 0], det_xy[dj, 1], ra_all[ci], dec_all[ci])
+            rms = float(np.sqrt(np.nanmean(res ** 2)))
+        wcs = pf.to_wcs()
         radius = max(3.0, 5 * rms)
 
     det_sky = wcs.pixel_to_world(det_xy[dj, 0], det_xy[dj, 1])
     sep = det_sky.separation(SkyCoord(ra_all[ci] * u.deg, dec_all[ci] * u.deg)).arcsec
+    px_arcsec = pf.pixel_scale_deg() * 3600
     return Solution(
         solver=init.solver, wcs=wcs, solve_ms=init.solve_ms, solver_info=init.info,
-        matched_cat=idx_all[ci], matched_det=dj, residual_arcsec=sep,
+        matched_cat=idx_all[ci], matched_det=dj, residual_arcsec=sep, model=model,
+        cv_arcsec={m: v * px_arcsec for m, v in scores.items()},
     )
 
 
@@ -348,5 +368,12 @@ def describe(sol: Solution, width: int, height: int) -> dict:
             "max": round(float(r.max()), 1),
         },
         "sip_order": int(w.sip.a_order) if w.sip is not None else None,
+        # Модель дисторсії і похибка на зорях, яких підгонка не бачила (чесна оцінка точності)
+        "distortion": {
+            "model": distortion.describe_model(sol.model),
+            "cv_rms_arcsec": round(sol.cv_arcsec[sol.model], 1) if sol.cv_arcsec else None,
+            "candidates": [{"model": distortion.describe_model(m), "cv_rms_arcsec": round(v, 1),
+                            "chosen": m == sol.model} for m, v in (sol.cv_arcsec or {}).items()],
+        },
         "wcs_header": {k: hdr[k] for k in hdr if k not in ("COMMENT", "HISTORY", "")},
     }
