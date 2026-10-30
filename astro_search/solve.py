@@ -95,7 +95,20 @@ def _wcs_from_mapping(pix2world, width: int, height: int) -> WCS:
     ra, dec = pix2world(xs, ys)
     ok = np.isfinite(ra) & np.isfinite(dec)
     sky = SkyCoord(np.asarray(ra)[ok] * u.deg, np.asarray(dec)[ok] * u.deg)
-    return fit_wcs_from_points((xs[ok], ys[ok]), sky, proj_point="center", projection="TAN")
+    c_ra, c_dec = pix2world(np.array([width / 2]), np.array([height / 2]))
+    center = SkyCoord(float(np.asarray(c_ra)[0]) * u.deg, float(np.asarray(c_dec)[0]) * u.deg)
+    return fit_wcs_from_points((xs[ok], ys[ok]), sky, proj_point=center, projection="TAN")
+
+
+def _frame_center(wcs: WCS, width: int, height: int) -> SkyCoord:
+    """Точка неба в центрі кадру — точка дотику для проєкції TAN.
+
+    proj_point="center" у fit_wcs_from_points усереднює координати зір, і біля
+    полюса світу (RA перескакує 0°/360°) центр опиняється деінде на небі:
+    частина зір тоді виходить за межі проєкції, і підгонка падає на NaN.
+    """
+    ra, dec = wcs.all_pix2world([[width / 2, height / 2]], 0)[0]
+    return SkyCoord(ra * u.deg, dec * u.deg)
 
 
 def solve_tetra3(dets: np.ndarray, width: int, height: int, catalog_dir: Path,
@@ -285,7 +298,8 @@ def refine(init: InitialSolution, dets: np.ndarray, cat: StarCatalog, epoch_year
             n = len(ci)
             sip = 3 if n >= 60 else 2 if n >= 20 else None
             wcs = fit_wcs_from_points((det_xy[dj, 0], det_xy[dj, 1]), sky,
-                                      proj_point="center", projection="TAN", sip_degree=sip)
+                                      proj_point=_frame_center(wcs, width, height),
+                                      projection="TAN", sip_degree=sip)
             px, py = world2pix(wcs, ra_all[ci], dec_all[ci])
             res = np.hypot(px - det_xy[dj, 0], py - det_xy[dj, 1])
             if not np.isfinite(res).any():
