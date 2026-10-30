@@ -139,6 +139,8 @@ export const api = {
 
   /** Завантаження через XHR, бо fetch не повідомляє про прогрес відправлення. */
   upload(form: FormData, onProgress: (fraction: number) => void): Promise<Job> {
+    const file = form.get("file");
+    const size = file instanceof File ? file.size : 0;
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open("POST", "/api/jobs");
@@ -146,7 +148,13 @@ export const api = {
       xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
       xhr.onload = () => {
         if (xhr.status === 202) resolve(xhr.response as Job);
-        else reject(new ApiError(xhr.response?.error ?? `${xhr.status} ${xhr.statusText}`));
+        else if (xhr.response?.error) reject(new ApiError(xhr.response.error));
+        else if (xhr.status === 413)
+          // Сам astro-search відповідає на завеликий файл кодом 400 з поясненням,
+          // тож 413 без тіла JSON приходить від проксі перед ним (у nginx за замовчуванням 1 МБ)
+          reject(new ApiError(`Файл (${(size / 1048576).toFixed(1)} МБ) відхилив проксі перед astro-search (413). ` +
+            "Збільште в ньому ліміт тіла запиту, напр. для nginx: client_max_body_size 300m;"));
+        else reject(new ApiError(`Помилка сервера: ${xhr.status} ${xhr.statusText}`.trim()));
       };
       xhr.onerror = () => reject(new ApiError("Сервер недоступний"));
       xhr.send(form);
