@@ -1,0 +1,209 @@
+"""Планети, Місяць і горизонтальна система координат (висота й азимут).
+
+Ефемерида de421 (JPL) береться з пакета skyfield-data, тож інтернет не потрібен.
+Вона покриває 1900–2050 роки.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from functools import lru_cache
+
+import numpy as np
+from astropy.wcs import WCS
+from scipy.spatial import cKDTree
+
+from .solve import near_field
+
+BODIES = [
+    ("Mercury", "mercury"),
+    ("Venus", "venus"),
+    ("Mars", "mars barycenter"),
+    ("Jupiter", "jupiter barycenter"),
+    ("Saturn", "saturn barycenter"),
+    ("Uranus", "uranus barycenter"),
+    ("Neptune", "neptune barycenter"),
+    ("Moon", "moon"),
+    ("Sun", "sun"),
+]
+
+# Стандартна атмосфера для оцінки рефракції
+REFRACTION = {"temperature_C": 10.0, "pressure_mbar": 1010.0}
+
+
+@lru_cache(maxsize=1)
+def _ephemeris():
+    import warnings
+
+    from skyfield.api import Loader
+
+    # skyfield-data попереджає, що в пакеті застарів finals2000A.all
+    # (таблиця обертання Землі). Ми його не використовуємо: timescale(builtin=True)
+    # бере вбудовані в skyfield таблиці, а з пакета потрібна лише ефемерида de421.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        from skyfield_data import get_skyfield_data_path
+
+        path = get_skyfield_data_path()
+    load = Loader(path, expire=False)
+    return load.timescale(builtin=True), load("de421.bsp")
+
+
+def _observer(lat: float, lon: float, elevation_m: float):
+    from skyfield.api import wgs84
+
+    _, eph = _ephemeris()
+    return eph["earth"] + wgs84.latlon(lat, lon, elevation_m=elevation_m)
+
+
+def _project(wcs: WCS, width: int, height: int, ra, dec) -> tuple[np.ndarray, np.ndarray]:
+    """Небо → пікселі; для точок далеко від кадру повертає NaN."""
+    ra, dec = np.atleast_1d(np.asarray(ra, float)), np.atleast_1d(np.asarray(dec, float))
+    x, y = np.full(ra.shape, np.nan), np.full(ra.shape, np.nan)
+    near = near_field(wcs, width, height, ra, dec)
+    if near.any():
+        x[near], y[near] = wcs.all_world2pix(ra[near], dec[near], 0)
+    return x, y
+
+
+def _in_frame(x, y, width, height):
+    return np.isfinite(x) & np.isfinite(y) & (x >= 0) & (x <= width - 1) & (y >= 0) & (y <= height - 1)
+
+
+def bodies(wcs: WCS, width: int, height: int, when: datetime, lat: float, lon: float,
+           elevation_m: float, dets: np.ndarray) -> list[dict]:
+    """Тіла Сонячної системи, що потрапляють у кадр.
+
+    Положення астрометричні (як у каталозі зір) і топоцентричні — з точки
+    спостереження, що важливо для Місяця (паралакс до ~1°).
+    Для кожного тіла вказано найближчу виявлену на кадрі точку і відхилення
+    від неї: це пряма перевірка точності розв'язку.
+    """
+    from skyfield.magnitudelib import planetary_magnitude
+
+    ts, eph = _ephemeris()
+    t = ts.from_datetime(when)
+    obs = _observer(lat, lon, elevation_m).at(t)
+    tree = cKDTree(dets[:, :2]) if len(dets) else None
+    scale = float(np.mean(np.abs(np.linalg.eigvals(wcs.pixel_scale_matrix)))) * 3600
+    out = []
+    for name, key in BODIES:
+        astrometric = obs.observe(eph[key])
+        ra, dec, dist = astrometric.radec()
+        xs, ys = _project(wcs, width, height, ra._degrees, dec.degrees)
+        if not _in_frame(xs, ys, width, height)[0]:
+            continue
+        x, y = float(xs[0]), float(ys[0])
+        alt, az, _ = astrometric.apparent().altaz()
+        alt_app, _, _ = astrometric.apparent().altaz(**REFRACTION)
+        item = {
+            "name": name,
+            "x": round(float(x), 2), "y": round(float(y), 2),
+            "ra_deg": round(float(ra._degrees), 5), "dec_deg": round(float(dec.degrees), 5),
+            "distance_au": round(float(dist.au), 5),
+            "alt_deg": round(float(alt.degrees), 3),
+            "alt_refracted_deg": round(float(alt_app.degrees), 3),
+            "az_deg": round(float(az.degrees), 3),
+            "mag": None,
+            "nearest_detection": None,
+        }
+        if name not in ("Moon", "Sun"):
+            try:
+                item["mag"] = round(float(planetary_magnitude(astrometric)), 2)
+            except Exception:
+                pass
+        if tree is not None:
+            dpx, j = tree.query([x, y])
+            radius_px = max(5.0, 600.0 / scale)  # пошук у межах ~10′
+            if dpx <= radius_px:
+                item["nearest_detection"] = {
+                    "index": int(j),
+                    "x": round(float(dets[j, 0]), 2), "y": round(float(dets[j, 1]), 2),
+                    "offset_px": round(float(dpx), 2),
+                    "offset_arcsec": round(float(dpx * scale), 1),
+                }
+        out.append(item)
+    return out
+
+
+def star_altaz(ra_deg: np.ndarray, dec_deg: np.ndarray, when: datetime, lat: float, lon: float,
+               elevation_m: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Висота (без рефракції та з нею) і азимут для масиву зір."""
+    from skyfield.api import Star
+
+    ts, _ = _ephemeris()
+    t = ts.from_datetime(when)
+    app = _observer(lat, lon, elevation_m).at(t).observe(
+        Star(ra_hours=np.asarray(ra_deg) / 15.0, dec_degrees=np.asarray(dec_deg))).apparent()
+    alt, az, _ = app.altaz()
+    alt_r, _, _ = app.altaz(**REFRACTION)
+    return alt.degrees, alt_r.degrees, az.degrees
+
+
+def _polylines(x, y, width, height):
+    """Розбиває ламану на шматки, що лежать у кадрі."""
+    ok = _in_frame(x, y, width, height)
+    lines, cur = [], []
+    for xi, yi, k in zip(x, y, ok):
+        if k:
+            cur.append([round(float(xi), 1), round(float(yi), 1)])
+        elif cur:
+            if len(cur) > 1:
+                lines.append(cur)
+            cur = []
+    if len(cur) > 1:
+        lines.append(cur)
+    return lines
+
+
+def horizontal(wcs: WCS, width: int, height: int, when: datetime, lat: float, lon: float,
+               elevation_m: float) -> dict:
+    """Куди дивився телефон і сітка висоти/азимута в піксельних координатах.
+
+    Висоти геометричні (без рефракції); горизонт — висота 0°.
+    """
+    ts, _ = _ephemeris()
+    t = ts.from_datetime(when)
+    obs = _observer(lat, lon, elevation_m).at(t)
+
+    def altaz_to_pix(alt, az):
+        pos = obs.from_altaz(alt_degrees=np.asarray(alt, float), az_degrees=np.asarray(az, float))
+        ra, dec, _ = pos.radec()
+        return _project(wcs, width, height, ra._degrees, dec.degrees)
+
+    def pix_to_altaz(px, py):
+        ra, dec = wcs.all_pix2world([px], [py], 0)
+        alt, alt_r, az = star_altaz(ra, dec, when, lat, lon, elevation_m)
+        return float(alt[0]), float(alt_r[0]), float(az[0])
+
+    c_alt, c_alt_r, c_az = pix_to_altaz(width / 2, height / 2)
+    # Куди на кадрі вказує зеніт: кут від напрямку «вгору» за годинниковою стрілкою
+    zx, zy = altaz_to_pix(min(c_alt + 1.0, 89.9), c_az)
+    if c_alt + 1.0 >= 89.9:
+        zenith_angle = None
+    else:
+        zenith_angle = float(np.degrees(np.arctan2(zx[0] - width / 2, height / 2 - zy[0]))) % 360
+
+    grid = []
+    az_dense = np.arange(0, 360.5, 0.5)
+    for alt in range(0, 90, 10):
+        x, y = altaz_to_pix(np.full_like(az_dense, alt), az_dense)
+        lines = _polylines(x, y, width, height)
+        if lines:
+            grid.append({"kind": "alt", "value": alt, "lines": lines})
+    alt_dense = np.arange(-5, 89.6, 0.5)
+    for az in range(0, 360, 15):
+        x, y = altaz_to_pix(alt_dense, np.full_like(alt_dense, az))
+        lines = _polylines(x, y, width, height)
+        if lines:
+            grid.append({"kind": "az", "value": az, "lines": lines})
+
+    corners = [pix_to_altaz(px, py) for px, py in
+               [(0, 0), (width - 1, 0), (0, height - 1), (width - 1, height - 1)]]
+    return {
+        "center": {"alt_deg": round(c_alt, 3), "alt_refracted_deg": round(c_alt_r, 3),
+                   "az_deg": round(c_az, 3)},
+        "alt_range_deg": [round(min(c[0] for c in corners), 2), round(max(c[0] for c in corners), 2)],
+        "zenith_direction_deg": None if zenith_angle is None else round(zenith_angle, 2),
+        "grid": grid,
+    }

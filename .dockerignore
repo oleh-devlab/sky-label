@@ -1,0 +1,5 @@
+.git
+data/
+catalog/
+**/__pycache__/
+*.pyc
