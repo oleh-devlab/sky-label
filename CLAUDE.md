@@ -90,19 +90,22 @@ The Dockerfile is multi-stage. The `node:22` stage runs `npm ci` and a type-chec
 
 Vite `base` is `/static/`.
 
-- `main.ts`:
-  - hash routing `#/<job id>`;
-  - polling `/api/jobs`, fast while anything is queued or running;
-  - upload, both the form and the immediate upload from the rail, drag-and-drop and the start page;
-  - layout state: collapsible left panel/rail, hideable result panel, fullscreen, phone drawer;
-  - global keyboard shortcuts.
-
-  Re-opening the same job keeps the view (`Viewer.getView/setView`) and the open tab.
+- `main.ts` is a thin entry point: server health, polling `/api/jobs` (fast while anything is queued or running), hash routing `#/<job id>`, and keyboard shortcuts. Re-opening the same job keeps the view (`Viewer.getView/setView`) and the open tab.
+- `layout.ts` is the page shell:
+  - the left panel, which collapses to a rail and is a drawer on phones;
+  - the hideable result panel;
+  - fullscreen, night mode, the help dialog and toasts.
+- `upload.ts` holds the upload form, the immediate upload (rail "+", start-page button, drag-and-drop when the form is hidden), the "usual place" fallback fields and the hint.
+- `screens.ts` builds the welcome, processing, failed and not-found screens. `jobList.ts` renders the frame list and the rail thumbnails.
 - `viewer.ts`:
   - the `<img>` is transformed with CSS, and the SVG overlay works in **screen coordinates**. Grid and constellation lines use a group transform with `vector-effect: non-scaling-stroke`. Markers are repositioned every frame.
   - labels are placed greedily without overlap, in this order: body labels, constellation names, marker circles, star labels.
   - star label tiers by zoom: proper names and Bayer letters always, Flamsteed numbers from ×1.8, HIP/HR from ×3.5.
-  - `exportPng` redraws the visible layers at full resolution.
+- Pieces split out of the viewer:
+  - `marks.ts`: layer and target types, display names, marker radii and label tiers, shared by the viewer, the panel and the PNG export;
+  - `cards.ts`: the object popover;
+  - `exportPng.ts`: redraws the visible layers at full resolution.
 - `panels.ts` holds the result tabs, including the time/place form from `place.ts`.
 - `wcs.ts` is a JS TAN-SIP pix→sky plus approximate alt/az, used only for the live cursor readout.
-- localStorage keys: `astro-ui` (panel state), `astro-home` (the usual place), `astro-night` (red night mode).
+- `storage.ts` wraps localStorage so a blocked storage never breaks the page. Keys: `astro-ui` (panel state), `astro-home` (the usual place), `astro-night` (red night mode).
+- `styles/*.css` is one cascade split by area. `main.ts` imports the files in a fixed order, and that order matters.

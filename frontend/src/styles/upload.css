@@ -1,0 +1,95 @@
+/* Форма завантаження і список кадрів. Порядок підключення в main.ts важливий: це один каскад. */
+
+/* ---------------------------------------------------------------- форма */
+
+.upload { display: flex; flex-direction: column; gap: 10px; }
+.dropzone {
+  position: relative;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 20px 12px; text-align: center; cursor: pointer;
+  border: 1.5px dashed var(--line-2); border-radius: 12px;
+  background: radial-gradient(circle at 50% 0%, rgba(125, 211, 252, 0.08), transparent 70%);
+  transition: border-color 0.2s, background 0.2s;
+}
+.dropzone:hover, .dropzone:focus-within { border-color: var(--accent); background-color: rgba(125, 211, 252, 0.05); }
+.dropzone input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.dz-icon { width: 28px; height: 28px; color: var(--accent); margin-bottom: 4px; }
+.dz-title { font-weight: 600; word-break: break-all; }
+.dz-sub { font-size: 12px; color: var(--muted); }
+.dropzone.has-file { border-style: solid; border-color: rgba(94, 234, 212, 0.6); }
+.dropzone.has-file .dz-icon { color: var(--teal); }
+
+.extra summary { cursor: pointer; color: var(--muted); font-size: 13px; list-style: none; }
+.extra summary::before { content: "▸ "; display: inline-block; transition: transform 0.2s; }
+.extra[open] summary::before { transform: rotate(90deg); }
+.extra summary small { opacity: 0.7; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+.grid2 label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+.span2 { grid-column: span 2; }
+.row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+input, select {
+  width: 100%; min-width: 0;
+  background: rgba(2, 6, 23, 0.6); color: var(--text);
+  border: 1px solid var(--line); border-radius: 8px;
+  padding: 6px 8px; font: inherit; font-size: 13px;
+}
+input:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(125, 211, 252, 0.15); }
+.row input[type="datetime-local"] { flex: 1 1 150px; }
+.row select { flex: 0 1 112px; width: auto; }
+.hint { font-size: 11.5px; color: var(--muted); margin: 8px 0 0; }
+.check { display: flex; gap: 8px; align-items: flex-start; font-size: 12px; color: var(--muted); cursor: pointer; }
+.check input { width: auto; margin: 2px 0 0; accent-color: var(--accent); }
+.grid2 label.check { flex-direction: row; font-size: 12px; }
+button.link { border: none; background: none; padding: 0; color: var(--accent); cursor: pointer; font-size: inherit; text-decoration: underline; text-underline-offset: 2px; }
+button.link:hover { color: var(--text); }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 8px 14px; border-radius: 10px;
+  border: 1px solid var(--line-2); background: var(--surface-2);
+  color: var(--text); cursor: pointer; font-weight: 550;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s, box-shadow 0.2s;
+}
+.btn svg { width: 16px; height: 16px; }
+.btn:hover:not(:disabled) { background: rgba(125, 211, 252, 0.12); border-color: var(--accent); }
+.btn:active:not(:disabled) { transform: translateY(1px); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn.primary {
+  background: linear-gradient(135deg, #38bdf8, #818cf8 60%, #c084fc);
+  border-color: transparent; color: #0b1020; font-weight: 700;
+  box-shadow: 0 6px 24px -8px rgba(129, 140, 248, 0.8);
+}
+.btn.primary:hover:not(:disabled) { box-shadow: 0 8px 30px -6px rgba(129, 140, 248, 1); background: linear-gradient(135deg, #7dd3fc, #a5b4fc 60%, #d8b4fe); }
+.btn.ghost { background: transparent; }
+.btn.danger { border-color: rgba(248, 113, 113, 0.4); color: #fca5a5; }
+.btn.danger:hover:not(:disabled) { background: rgba(248, 113, 113, 0.12); border-color: var(--bad); }
+
+.progress { height: 4px; border-radius: 4px; background: var(--surface-2); overflow: hidden; }
+.progress i { display: block; height: 100%; width: calc(var(--p, 0) * 100%); background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width 0.15s; }
+.form-error { margin: 0; color: var(--bad); font-size: 12.5px; min-height: 0; }
+.form-error:empty { display: none; }
+
+/* ---------------------------------------------------------------- список кадрів */
+
+.jobs { flex: 1; min-height: 160px; display: flex; flex-direction: column; }
+.jobs h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 8px; }
+.job-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; overflow: auto; }
+.job-list .empty { color: var(--muted); font-size: 13px; padding: 12px 4px; }
+.job {
+  display: flex; gap: 10px; align-items: center; padding: 6px; border-radius: 10px;
+  color: var(--text); border: 1px solid transparent; transition: background 0.15s;
+}
+.job:hover { background: var(--surface-2); }
+.job.active { background: rgba(125, 211, 252, 0.1); border-color: rgba(125, 211, 252, 0.35); }
+.thumb { width: 52px; height: 40px; border-radius: 7px; overflow: hidden; flex: none; background: #0a0f24; display: grid; place-items: center; }
+.thumb img { width: 100%; height: 100%; object-fit: cover; }
+.thumb-ph { width: 100%; height: 100%; background: radial-gradient(circle at 30% 40%, #fff 0.6px, transparent 1.5px) 0 0 / 11px 9px, #0a0f24; opacity: 0.6; }
+.thumb-ph.spin { background: conic-gradient(from 0deg, transparent, rgba(125, 211, 252, 0.6), transparent 40%) , #0a0f24; animation: spin 1.4s linear infinite; border-radius: 50%; width: 22px; height: 22px; }
+.job-meta { display: flex; flex-direction: column; min-width: 0; }
+.job-meta b { font-weight: 550; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job-meta small { color: var(--muted); font-size: 11.5px; }
+.status.done { color: var(--good); }
+.status.failed { color: var(--bad); }
+.status.running, .status.queued { color: var(--warn); }
+
+@keyframes spin { to { transform: rotate(360deg); } }

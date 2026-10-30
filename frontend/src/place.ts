@@ -1,6 +1,7 @@
 // Час і місце зйомки: часові пояси, «звичне місце» в браузері, форма зміни для готового кадру.
 
 import type { ObservationUpdate } from "./api";
+import { load, save } from "./storage";
 import { h, icon, num } from "./util";
 
 // ---------------------------------------------------------------- часові пояси
@@ -43,22 +44,11 @@ const HOME_KEY = "astro-home";
 
 /** Місце, яке береться для фото без GPS. Живе лише в цьому браузері. */
 export function getHome(): Place | null {
-  try {
-    const p = JSON.parse(localStorage.getItem(HOME_KEY) ?? "null");
-    return p && Number.isFinite(p.lat) && Number.isFinite(p.lon) ? p : null;
-  } catch {
-    return null;
-  }
+  const p = load<Place | null>(HOME_KEY, null);
+  return p && Number.isFinite(p.lat) && Number.isFinite(p.lon) ? p : null;
 }
 
-export function setHome(p: Place | null) {
-  try {
-    if (p) localStorage.setItem(HOME_KEY, JSON.stringify(p));
-    else localStorage.removeItem(HOME_KEY);
-  } catch {
-    /* приватний режим: просто не запам'ятаємо */
-  }
-}
+export const setHome = (p: Place | null) => save(HOME_KEY, p);
 
 export const fmtPlace = (p: Place) => `${num(p.lat, 4)}°, ${num(p.lon, 4)}°`;
 

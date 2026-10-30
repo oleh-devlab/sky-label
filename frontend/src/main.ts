@@ -1,11 +1,25 @@
-import "./style.css";
+// Точка входу: стан сервера, опитування задач, маршрут #/<id>, клавіші.
+
+import "./styles/base.css";
+import "./styles/shell.css";
+import "./styles/upload.css";
+import "./styles/screens.css";
+import "./styles/viewer.css";
+import "./styles/panel.css";
+import "./styles/overlays.css";
+import "./styles/responsive.css";
 
 import { api, type Health, type Job } from "./api";
+import { renderJobList } from "./jobList";
+import { help, initLayout, narrow, setPanel, setSide, toggleFullscreen, toggleNight, ui, viewerButtons } from "./layout";
 import { ResultPanel } from "./panels";
-import { acceptPastedPair, fillTzSelect, fmtPlace, geolocate, getHome, isoWithOffset, setHome } from "./place";
+import { setHome } from "./place";
+import { failedScreen, notFoundScreen, pendingScreen, updatePending, welcomeScreen } from "./screens";
 import { startStarfield } from "./starfield";
-import { $, ago, duration, h, icon, num } from "./util";
-import { Viewer, type Layer } from "./viewer";
+import { initUpload, renderLocHint } from "./upload";
+import { $, h, num } from "./util";
+import type { Layer } from "./marks";
+import { Viewer } from "./viewer";
 
 // ---------------------------------------------------------------- стан
 
@@ -16,70 +30,8 @@ let current: { viewer: Viewer; panel: ResultPanel } | null = null;
 let pollTimer = 0;
 
 const main = $("#main");
-const jobList = $("#jobs");
-const railJobs = $("#rail-jobs");
-
-// ---------------------------------------------------------------- розкладка
-
-/** Ліва панель кадрів і права панель результату: розгорнуті чи ні (пам'ятається). */
-// Поки ви не вибрали самі, ліва панель розгорнута лише на широких екранах:
-// на ноутбуці вона забирає в кадру забагато місця
-const ui = { side: window.innerWidth >= 1500, panel: true };
-const narrow = matchMedia("(max-width: 820px)");
-const UI_KEY = "astro-ui";
-try {
-  Object.assign(ui, JSON.parse(localStorage.getItem(UI_KEY) ?? "{}"));
-} catch {
-  /* приватний режим */
-}
-// На телефоні ліва панель висувна й за замовчуванням схована
-if (narrow.matches) ui.side = false;
-
-function saveUi() {
-  try {
-    // Висунута на телефоні панель — тимчасовий стан, його не запам'ятовуємо
-    localStorage.setItem(UI_KEY, JSON.stringify({ side: narrow.matches ? true : ui.side, panel: ui.panel }));
-  } catch {
-    /* приватний режим */
-  }
-}
-
-function applyLayout() {
-  document.body.classList.toggle("side-collapsed", !ui.side);
-  document.body.classList.toggle("panel-collapsed", !ui.panel);
-  $("#btn-side").setAttribute("aria-expanded", String(ui.side));
-  main.querySelectorAll(".panel-toggle").forEach((b) => b.setAttribute("aria-pressed", String(ui.panel)));
-}
-
-function setSide(open: boolean) {
-  ui.side = open;
-  saveUi();
-  applyLayout();
-}
-
-function setPanel(open: boolean) {
-  ui.panel = open;
-  saveUi();
-  applyLayout();
-}
-
-function toggleFullscreen() {
-  if (document.fullscreenElement) document.exitFullscreen();
-  else main.querySelector(".result")?.requestFullscreen().catch(() => {});
-}
-
-$("#btn-side").addEventListener("click", () => setSide(!ui.side));
-$(".layout").append(h("div.scrim", { onclick: () => setSide(false) }));
-
-/** Коротке повідомлення внизу екрана (коли форма завантаження згорнута). */
-function toast(text: string, kind: "info" | "error" = "info") {
-  const el = h(`div.toast.${kind}`, { role: kind === "error" ? "alert" : "status" }, text);
-  document.body.append(el);
-  setTimeout(() => el.classList.add("out"), kind === "error" ? 6000 : 2500);
-  setTimeout(() => el.remove(), kind === "error" ? 6600 : 3100);
-}
-
 const routeId = () => location.hash.match(/^#\/([0-9a-f]{32})$/)?.[1] ?? null;
+const show = (el: HTMLElement) => main.replaceChildren(el);
 
 // ---------------------------------------------------------------- стан сервера
 
@@ -94,73 +46,24 @@ async function loadHealth() {
     el.replaceChildren(h("span.pill.bad", {}, h("i"), "сервер недоступний"));
     return;
   }
-  const solvers = Object.entries(health.solvers);
   el.replaceChildren(
     h(`span.pill.${health.status === "ok" ? "good" : "bad"}`, { title: `версія ${health.version}` }, h("i"),
       health.status === "ok" ? `${num(health.catalog_stars, 0)} зір у каталозі` : "немає каталогу"),
-    ...solvers.map(([name, ok]) => h(`span.pill.${ok ? "good" : "off"}`, { title: ok ? "розв'язувач доступний" : "розв'язувач недоступний" }, h("i"), name)),
+    ...Object.entries(health.solvers).map(([name, ok]) =>
+      h(`span.pill.${ok ? "good" : "off"}`, { title: ok ? "розв'язувач доступний" : "розв'язувач недоступний" }, h("i"), name)),
     ...(health.queue_length ? [h("span.pill.warn", {}, h("i"), `у черзі: ${health.queue_length}`)] : []),
   );
   renderLocHint();
 }
 
-/** Підказка у формі: яке місце візьметься для фото без GPS. */
-function renderLocHint() {
-  const el = $("#default-loc");
-  const home = getHome();
-  if (home) {
-    el.replaceChildren(`Для фото без GPS береться ваше звичне місце: ${fmtPlace(home)}. `,
-      h("button.link", { type: "button", onclick: () => { setHome(null); renderLocHint(); } }, "Забути"));
-  } else {
-    const dl = health?.default_location;
-    el.replaceChildren(dl
-      ? `Для фото без GPS зараз береться місце за замовчуванням сервера (${num(dl.lat, 4)}°, ${num(dl.lon, 4)}°). Вкажіть своє й позначте «запам'ятати» — далі воно братиметься саме.`
-      : "");
-  }
-  const remember = form.elements.namedItem("remember") as HTMLInputElement;
-  remember.checked = !home;
-  // Підказки в полях — звичне місце, а не чиєсь чуже за замовчуванням
-  (form.elements.namedItem("lat") as HTMLInputElement).placeholder = home ? String(home.lat) : "напр. 50.45";
-  (form.elements.namedItem("lon") as HTMLInputElement).placeholder = home ? String(home.lon) : "напр. 30.52";
-}
-
-// ---------------------------------------------------------------- список задач
-
-const STATUS_UA: Record<Job["status"], string> = { queued: "у черзі", running: "обробка", done: "готово", failed: "помилка" };
-
-function renderJobs() {
-  $("#jobs-count").textContent = jobs.length ? String(jobs.length) : "";
-  // Вузька смужка згорнутої панелі: лише мініатюри
-  railJobs.replaceChildren(...jobs.map((j) => {
-    const done = j.status === "done" || j.status === "failed";
-    const img = h("img", { src: j.links.preview, alt: "", loading: "lazy" });
-    img.addEventListener("error", () => img.replaceWith(h("span.thumb-ph")), { once: true });
-    return h("li", {}, h(`a.rail-job.${j.status}${j.id === currentId ? ".active" : ""}`,
-      { href: `#/${j.id}`, title: `${j.filename} · ${STATUS_UA[j.status]}` },
-      done ? img : h("span.thumb-ph.spin")));
-  }));
-  if (!jobs.length) {
-    jobList.replaceChildren(h("li.empty", {}, "Тут з'являться ваші кадри."));
-    return;
-  }
-  jobList.replaceChildren(...jobs.map((j) => {
-    const thumb = h("img", { src: j.links.preview, alt: "", loading: "lazy" });
-    thumb.addEventListener("error", () => thumb.replaceWith(h("span.thumb-ph")), { once: true });
-    return h("li", {},
-      h(`a.job${j.id === currentId ? ".active" : ""}`, { href: `#/${j.id}` },
-        h("span.thumb", {}, j.status === "done" || j.status === "failed" ? thumb : h("span.thumb-ph.spin")),
-        h("span.job-meta", {},
-          h("b", { title: j.filename }, j.filename),
-          h("small", {}, h(`span.status.${j.status}`, {}, STATUS_UA[j.status]), " · ", ago(j.created)))));
-  }));
-}
+// ---------------------------------------------------------------- задачі
 
 async function refreshJobs() {
   clearTimeout(pollTimer);
   try {
     const prev = new Map(jobs.map((j) => [j.id, j.status]));
     jobs = await api.jobs();
-    renderJobs();
+    renderJobList(jobs, currentId);
     // Відкрита задача змінила статус: перемалювати
     const cur = jobs.find((j) => j.id === currentId);
     if (cur && prev.has(cur.id) && prev.get(cur.id) !== cur.status) await openJob(cur.id);
@@ -171,6 +74,12 @@ async function refreshJobs() {
   const busy = jobs.some((j) => j.status === "queued" || j.status === "running");
   if (busy) loadHealth();
   pollTimer = window.setTimeout(refreshJobs, busy ? 1500 : 10000);
+}
+
+async function removeJob(id: string) {
+  await api.remove(id);
+  location.hash = "#/";
+  refreshJobs();
 }
 
 // ---------------------------------------------------------------- головна область
@@ -185,10 +94,10 @@ async function openJob(id: string | null) {
   const keep = current && current.viewer.job.id === id ? { view: current.viewer.getView(), tab: current.panel.tab } : null;
   currentId = id;
   if (narrow.matches && ui.side) setSide(false);
-  renderJobs();
+  renderJobList(jobs, currentId);
   if (!id) {
     closeCurrent();
-    renderWelcome();
+    show(welcomeScreen(jobs.filter((j) => j.status === "done").length));
     return;
   }
   let job: Job;
@@ -196,276 +105,50 @@ async function openJob(id: string | null) {
     job = await api.job(id);
   } catch (e) {
     closeCurrent();
-    main.replaceChildren(h("div.empty-state", {}, h("h1", {}, "Задачу не знайдено"), h("p", {}, String((e as Error).message)), h("a.btn", { href: "#/" }, "На головну")));
+    show(notFoundScreen(String((e as Error).message)));
     return;
   }
   if (currentId !== id) return; // користувач уже перейшов деінде
-  if (job.status === "done" && job.result) {
-    closeCurrent();
-    const viewer = new Viewer(job, job.result);
-    const panel = new ResultPanel(job, job.result, viewer, async () => {
-      await api.remove(job.id);
-      location.hash = "#/";
-      refreshJobs();
-    }, async (body, remember) => {
-      if (Object.keys(body).length) await api.observe(job.id, body);
-      if (remember) setHome(remember);
-      renderLocHint();
-      await openJob(job.id);
-    });
-    viewer.onSelect = (t) => panel.highlight(t);
-    viewer.tools.append(
-      h("button.icon-btn.panel-toggle", { title: "Панель результату (])", "aria-pressed": String(ui.panel), onclick: () => setPanel(!ui.panel) }, icon("panel")),
-      h("button.icon-btn", { title: "Повний екран (F)", onclick: toggleFullscreen }, icon("expand")),
-    );
-    current = { viewer, panel };
-    main.replaceChildren(h("div.result", {}, viewer.el, panel.el));
-    if (keep) {
-      viewer.setView(keep.view);
-      panel.show(keep.tab);
-    }
-  } else if (job.status === "failed") {
-    closeCurrent();
-    main.replaceChildren(h("div.empty-state.failed", {},
-      h("div.failed-icon", {}, "✕"),
-      h("h1", {}, "Не вдалося обробити кадр"),
-      h("p", {}, job.filename),
-      h("pre", {}, job.error ?? "невідома помилка"),
-      h("div.row", {},
-        h("a.btn", { href: job.links.original }, icon("download"), "Оригінал"),
-        h("button.btn.danger", { onclick: async () => { await api.remove(job.id); location.hash = "#/"; refreshJobs(); } }, icon("trash"), "Видалити"))));
-  } else {
-    closeCurrent();
-    renderPending(job);
+  closeCurrent();
+  if (job.status === "done" && job.result) showResult(job, job.result, keep);
+  else if (job.status === "failed") show(failedScreen(job, () => removeJob(job.id)));
+  else renderPending(job);
+}
+
+function showResult(job: Job, result: NonNullable<Job["result"]>, keep: { view: ReturnType<Viewer["getView"]>; tab: ResultPanel["tab"] } | null) {
+  const viewer = new Viewer(job, result);
+  const panel = new ResultPanel(job, result, viewer, () => removeJob(job.id), async (body, remember) => {
+    if (Object.keys(body).length) await api.observe(job.id, body);
+    if (remember) setHome(remember);
+    renderLocHint();
+    await openJob(job.id);
+  });
+  viewer.onSelect = (t) => panel.highlight(t);
+  viewer.tools.append(...viewerButtons());
+  current = { viewer, panel };
+  show(h("div.result", {}, viewer.el, panel.el));
+  if (keep) {
+    viewer.setView(keep.view);
+    panel.show(keep.tab);
   }
 }
 
-/** Обробка триває: прев'ю (коли з'явиться) під «радаром». */
 function renderPending(job: Job) {
   const existing = main.querySelector<HTMLElement>(".pending");
-  const stage = job.status === "queued" ? "Чекає в черзі" : "Шукаю зорі й розв'язую кадр";
-  const elapsed = job.started ? duration(job.started) : duration(job.created);
-  if (existing && existing.dataset.id === job.id) {
-    $(".pending-stage", existing).textContent = stage;
-    $(".pending-time", existing).textContent = elapsed;
-    const img = $<HTMLImageElement>(".pending-img img", existing);
-    // Прев'ю з'являється лише після читання файлу: поки задача в черзі, його не просимо
-    if (img && !img.naturalWidth && job.status === "running") img.src = `${job.links.preview}?t=${Date.now()}`;
-    return;
-  }
-  const img = h("img", { src: job.status === "running" ? job.links.preview : null, alt: "", class: "missing" });
-  img.addEventListener("error", () => img.classList.add("missing"));
-  img.addEventListener("load", () => img.classList.remove("missing"));
-  main.replaceChildren(h("div.pending", { "data-id": job.id },
-    h("div.pending-img", {}, img, h("div.radar"), h("div.scanline")),
-    h("div.pending-text", {},
-      h("p.eyebrow", {}, job.filename),
-      h("h1.pending-stage", {}, stage),
-      h("p.muted", {}, "минуло ", h("span.pending-time", {}, elapsed)),
-      h("ol.steps", {},
-        ["Читання файлу й EXIF", "Пошук зір на кадрі", "Plate solving: tetra3rs → astrometry.net", "Уточнення за каталогом HYG", "Планети, Місяць, сітка висоти"].map((t) => h("li", {}, t))))));
+  if (existing && existing.dataset.id === job.id) updatePending(existing, job);
+  else show(pendingScreen(job));
 }
 
-function renderWelcome() {
-  const done = jobs.filter((j) => j.status === "done").length;
-  main.replaceChildren(h("div.welcome", {},
-    h("div.orbit", { "aria-hidden": "true" }, h("i"), h("i"), h("i")),
-    h("h1", {}, "Що там, на вашому небі?"),
-    h("p.lead", {}, "Завантажте фото нічного неба — з телефона чи камери, хоч через вікно. ",
-      "astro-search знайде зорі, визначить, куди дивилася камера, підпише зорі, планети й Місяць і покаже, наскільки точно все збіглося."),
-    h("button.btn.primary.cta", { onclick: () => $<HTMLInputElement>("#rail-file").click() }, icon("upload"), "Вибрати фото"),
-    h("div.features", {},
-      feature("✦", "Plate solving", "tetra3rs за мілісекунди, astrometry.net як запасний варіант, уточнення TAN-SIP за каталогом HYG."),
-      feature("♃", "Планети й Місяць", "Положення за ефемеридою JPL DE421 на момент зйомки з вашої точки на Землі."),
-      feature("◎", "Горизонт", "Висота й азимут кожної точки кадру, сітка й лінія горизонту з урахуванням рефракції."),
-      feature("⌖", "Чесна точність", "Скільки зір збіглося і наскільки вони відхилилися від каталогу, у кутових секундах.")),
-    h("p.muted", {}, done ? `Уже розпізнано кадрів: ${done}. Виберіть будь-який ліворуч.` : "Усе працює локально й офлайн: фото нікуди не відправляються."),
-  ));
-}
-
-const feature = (glyph: string, title: string, text: string) => h("div.feature", {}, h("span", {}, glyph), h("b", {}, title), h("p", {}, text));
-
-// ---------------------------------------------------------------- завантаження
-
-const form = $<HTMLFormElement>("#upload");
-const fileInput = $<HTMLInputElement>("#file");
-
-const initTzSelect = () => fillTzSelect(form.elements.namedItem("tz") as HTMLSelectElement);
-
-function setFile(f: File | null) {
-  const dz = $("#dropzone");
-  dz.classList.toggle("has-file", !!f);
-  $("#dz-title").textContent = f ? f.name : "Перетягніть фото неба";
-  $("#dz-sub").textContent = f ? `${num(f.size / 1048576, 1)} МБ · натисніть, щоб замінити` : "або натисніть, щоб вибрати · JPG, PNG, HEIC, RAW/DNG";
-  ($("#btn-send") as HTMLButtonElement).disabled = !f;
-  $("#up-error").textContent = "";
-}
-
-fileInput.addEventListener("change", () => setFile(fileInput.files?.[0] ?? null));
-
-form.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const f = fileInput.files?.[0];
-  if (!f) return;
-  const fd = new FormData();
-  fd.append("file", f);
-  // Десяткова кома теж годиться: «49,84» → «49.84»
-  const val = (n: string) => (form.elements.namedItem(n) as HTMLInputElement).value.trim().replace(",", ".");
-  if (val("time_local")) fd.append("time", isoWithOffset(val("time_local"), Number(val("tz"))));
-  for (const k of ["lat", "lon", "elevation_m", "fov_deg"]) if (val(k)) fd.append(k, val(k));
-  if (!!val("lat") !== !!val("lon")) {
-    $("#up-error").textContent = "Вкажіть і широту, і довготу.";
-    return;
-  }
-  appendHome(fd);
-  const rememberNew = (form.elements.namedItem("remember") as HTMLInputElement).checked && val("lat") && val("lon")
-    ? { lat: Number(val("lat")), lon: Number(val("lon")), elevation_m: val("elevation_m") ? Number(val("elevation_m")) : null }
-    : null;
-
-  const btn = $<HTMLButtonElement>("#btn-send");
-  btn.disabled = true;
-  try {
-    await upload(fd);
-    if (rememberNew) setHome(rememberNew);
-    form.reset();
-    initTzSelect();
-    renderLocHint();
-    setFile(null);
-  } catch (err) {
-    $("#up-error").textContent = (err as Error).message;
-    btn.disabled = false;
-  }
-});
-
-/** Додати до форми звичне місце: сервер візьме його, лише якщо в EXIF немає GPS. */
-function appendHome(fd: FormData) {
-  const home = getHome();
-  if (home) {
-    fd.append("fallback_lat", String(home.lat));
-    fd.append("fallback_lon", String(home.lon));
-    if (home.elevation_m != null) fd.append("fallback_elevation_m", String(home.elevation_m));
-  }
-}
-
-async function upload(fd: FormData) {
-  const bar = $("#up-progress");
-  const rail = $(".rail-add");
-  bar.hidden = false;
-  rail.classList.add("busy");
-  try {
-    const job = await api.upload(fd, (p) => {
-      bar.style.setProperty("--p", String(p));
-      rail.style.setProperty("--p", String(p));
-    });
-    location.hash = `#/${job.id}`;
-    refreshJobs();
-  } finally {
-    bar.hidden = true;
-    bar.style.setProperty("--p", "0");
-    rail.classList.remove("busy");
-    rail.style.setProperty("--p", "0");
-  }
-}
-
-/** Одразу завантажити файл без форми (смужка, перетягування, кнопка на головній).
- *  Час і місце, якщо треба, можна вказати вже на сторінці результату. */
-async function quickUpload(f: File) {
-  const fd = new FormData();
-  fd.append("file", f);
-  appendHome(fd);
-  toast(`Завантажую ${f.name}…`);
-  try {
-    await upload(fd);
-  } catch (err) {
-    toast((err as Error).message, "error");
-  }
-}
-
-const railFile = $<HTMLInputElement>("#rail-file");
-railFile.addEventListener("change", () => {
-  const f = railFile.files?.[0];
-  railFile.value = "";
-  if (f) quickUpload(f);
-});
-
-$("#btn-geo").addEventListener("click", async () => {
-  const btn = $<HTMLButtonElement>("#btn-geo");
-  const set = (n: string, v: number | null | undefined) => v != null && ((form.elements.namedItem(n) as HTMLInputElement).value = String(v));
-  btn.disabled = true;
-  try {
-    const p = await geolocate();
-    set("lat", p.lat);
-    set("lon", p.lon);
-    set("elevation_m", p.elevation_m != null ? Math.round(p.elevation_m) : null);
-  } catch (err) {
-    $("#up-error").textContent = `Не вдалося отримати місце: ${(err as Error).message}`;
-  } finally {
-    btn.disabled = false;
-  }
-});
-acceptPastedPair(form.elements.namedItem("lat") as HTMLInputElement, form.elements.namedItem("lon") as HTMLInputElement);
-
-// Перетягування файлу будь-куди у вікно
-let dragDepth = 0;
-const overlay = $("#drop-overlay");
-window.addEventListener("dragenter", (e) => {
-  if (!e.dataTransfer?.types.includes("Files")) return;
-  dragDepth++;
-  overlay.hidden = false;
-});
-window.addEventListener("dragleave", () => {
-  if (--dragDepth <= 0) {
-    dragDepth = 0;
-    overlay.hidden = true;
-  }
-});
-window.addEventListener("dragover", (e) => e.preventDefault());
-window.addEventListener("drop", (e) => {
-  e.preventDefault();
-  dragDepth = 0;
-  overlay.hidden = true;
-  const f = e.dataTransfer?.files[0];
-  if (!f) return;
-  // Форму не видно — завантажити одразу; інакше покласти файл у форму, щоб дописати час і місце
-  if (!ui.side || narrow.matches) {
-    quickUpload(f);
-    return;
-  }
-  const dt = new DataTransfer();
-  dt.items.add(f);
-  fileInput.files = dt.files;
-  setFile(f);
-});
-
-// ---------------------------------------------------------------- нічний режим, клавіші
-
-const nightBtn = $("#btn-night");
-function setNight(on: boolean) {
-  document.documentElement.classList.toggle("night", on);
-  nightBtn.setAttribute("aria-pressed", String(on));
-  try {
-    localStorage.setItem("astro-night", on ? "1" : "0");
-  } catch {
-    /* приватний режим */
-  }
-}
-nightBtn.addEventListener("click", () => setNight(!document.documentElement.classList.contains("night")));
-try {
-  setNight(localStorage.getItem("astro-night") === "1");
-} catch {
-  /* приватний режим */
-}
-
-const help = $<HTMLDialogElement>("#help");
-$("#btn-help").addEventListener("click", () => help.showModal());
+// ---------------------------------------------------------------- клавіші
 
 const LAYER_KEYS: Record<string, Layer> = { s: "stars", p: "bodies", c: "constellations", g: "grid", d: "detections", l: "labels" };
+
 window.addEventListener("keydown", (e) => {
   const t = e.target as HTMLElement;
-  if (e.ctrlKey || e.metaKey || e.altKey || t.matches("input, select, textarea") || help.open) return;
+  if (e.ctrlKey || e.metaKey || e.altKey || t.matches("input, select, textarea") || help().open) return;
   const k = e.key.toLowerCase();
-  if (k === "n") return setNight(!document.documentElement.classList.contains("night"));
-  if (k === "?") return help.showModal();
+  if (k === "n") return toggleNight();
+  if (k === "?") return help().showModal();
   if (k === "[") return setSide(!ui.side);
   if (k === "escape" && narrow.matches && ui.side) return setSide(false);
   if (!current) return;
@@ -484,10 +167,15 @@ window.addEventListener("keydown", (e) => {
 
 // ---------------------------------------------------------------- старт
 
-applyLayout();
+initLayout();
+initUpload({
+  onUploaded: (job) => {
+    location.hash = `#/${job.id}`;
+    refreshJobs();
+  },
+  health: () => health,
+});
 startStarfield($<HTMLCanvasElement>("#starfield"));
-initTzSelect();
-renderLocHint();
 window.addEventListener("hashchange", () => openJob(routeId()));
 loadHealth();
 setInterval(loadHealth, 30000);

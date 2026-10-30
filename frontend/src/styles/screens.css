@@ -1,0 +1,73 @@
+/* Екрани вітання й обробки. Порядок підключення в main.ts важливий: це один каскад. */
+
+/* ---------------------------------------------------------------- вітання */
+
+.welcome {
+  height: 100%; overflow: auto;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  text-align: center; padding: 32px 24px; gap: 18px;
+}
+.welcome h1 {
+  font-size: clamp(28px, 4.2vw, 52px); line-height: 1.1;
+  background: linear-gradient(120deg, #e0f2fe 10%, #a5b4fc 50%, #f5d0fe 90%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.cta { padding: 12px 22px; font-size: 15px; }
+.cta svg { width: 18px; height: 18px; }
+.lead { max-width: 640px; color: #b8c4da; font-size: 16px; margin: 0; }
+.features { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; max-width: 900px; width: 100%; margin: 8px 0; }
+.feature {
+  text-align: left; padding: 16px; border-radius: var(--radius);
+  background: var(--surface); border: 1px solid var(--line); backdrop-filter: blur(10px);
+  transition: transform 0.25s, border-color 0.25s;
+}
+.feature:hover { transform: translateY(-3px); border-color: rgba(196, 181, 253, 0.45); }
+.feature span { font-size: 22px; color: var(--gold-soft); display: block; margin-bottom: 6px; text-shadow: 0 0 12px rgba(253, 230, 138, 0.6); }
+.feature p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+
+.orbit { position: relative; width: 120px; height: 120px; }
+.orbit::before {
+  content: ""; position: absolute; inset: 42px; border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #fef3c7, #f59e0b 60%, #b45309);
+  box-shadow: 0 0 40px rgba(251, 191, 36, 0.55);
+}
+.orbit i { position: absolute; inset: 0; border: 1px dashed rgba(148, 163, 184, 0.3); border-radius: 50%; animation: spin 9s linear infinite; }
+.orbit i:nth-child(2) { inset: 14px; animation-duration: 6s; animation-direction: reverse; }
+.orbit i:nth-child(3) { inset: 28px; animation-duration: 4s; border: none; }
+.orbit i::after { content: ""; position: absolute; top: -4px; left: 50%; width: 8px; height: 8px; margin-left: -4px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
+.orbit i:nth-child(2)::after { background: var(--accent-2); box-shadow: 0 0 12px var(--accent-2); width: 6px; height: 6px; }
+.orbit i:nth-child(3)::after { background: #f9fafb; width: 4px; height: 4px; }
+
+.empty-state { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; text-align: center; }
+.empty-state pre { max-width: min(720px, 100%); white-space: pre-wrap; background: rgba(2, 6, 23, 0.7); border: 1px solid var(--line); border-radius: 10px; padding: 12px; color: #fca5a5; font-size: 12.5px; text-align: left; }
+.failed-icon { width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center; font-size: 26px; background: rgba(248, 113, 113, 0.12); color: var(--bad); border: 1px solid rgba(248, 113, 113, 0.4); }
+
+/* ---------------------------------------------------------------- обробка */
+
+.pending { height: 100%; display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(260px, 1fr); gap: 32px; align-items: center; padding: 32px; }
+.pending-img { position: relative; border-radius: 18px; overflow: hidden; aspect-ratio: 4 / 3; background: #050816; border: 1px solid var(--line); box-shadow: 0 30px 80px -30px rgba(56, 189, 248, 0.35); }
+.pending-img img { width: 100%; height: 100%; object-fit: contain; filter: saturate(0.6) brightness(0.85); }
+.pending-img img.missing { opacity: 0; }
+.radar {
+  position: absolute; left: 50%; top: 50%; width: 150%; aspect-ratio: 1; translate: -50% -50%;
+  background: conic-gradient(from 0deg at 50% 50%, rgba(94, 234, 212, 0.28), transparent 18%);
+  animation: spin 3.2s linear infinite; mix-blend-mode: screen;
+}
+.pending-img::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: repeating-radial-gradient(circle at 50% 50%, transparent 0 59px, rgba(94, 234, 212, 0.18) 60px 61px),
+    linear-gradient(rgba(94, 234, 212, 0.12), rgba(94, 234, 212, 0.12)) 50% 0 / 1px 100% no-repeat,
+    linear-gradient(rgba(94, 234, 212, 0.12), rgba(94, 234, 212, 0.12)) 0 50% / 100% 1px no-repeat;
+}
+.scanline { position: absolute; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, transparent, var(--teal), transparent); box-shadow: 0 0 16px var(--teal); animation: scan 2.6s ease-in-out infinite alternate; }
+@keyframes scan { from { top: 4%; } to { top: 96%; } }
+.eyebrow { margin: 0; text-transform: uppercase; letter-spacing: 0.12em; font-size: 11.5px; color: var(--accent); }
+.pending-text h1 { font-size: 28px; margin: 6px 0; }
+.steps { margin: 18px 0 0; padding: 0; list-style: none; counter-reset: s; display: flex; flex-direction: column; gap: 10px; }
+.steps li { counter-increment: s; display: flex; gap: 10px; align-items: center; color: var(--muted); animation: pulse 5s infinite; }
+.steps li::before { content: counter(s); width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; border: 1px solid var(--line-2); }
+.steps li:nth-child(2) { animation-delay: 1s; }
+.steps li:nth-child(3) { animation-delay: 2s; }
+.steps li:nth-child(4) { animation-delay: 3s; }
+.steps li:nth-child(5) { animation-delay: 4s; }
+@keyframes pulse { 0%, 100% { color: var(--muted); } 10%, 20% { color: var(--text); } }

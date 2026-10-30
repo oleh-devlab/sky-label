@@ -3,8 +3,9 @@
 import type { Job, ObservationUpdate, Result } from "./api";
 import { placeForm, type Place } from "./place";
 import { skyDome } from "./skydome";
+import { bodyGlyph, bodyName, constellationName, starSubtitle, targetName, type Target } from "./marks";
 import { BODY_UA, CONSTELLATIONS, KIND_UA, LOCATION_SOURCE_UA, SOURCE_UA, arc, compass, dms, download, h, hms, icon, num, s, when } from "./util";
-import { targetName, type Target, type Viewer } from "./viewer";
+import type { Viewer } from "./viewer";
 
 export type Tab = "overview" | "objects" | "accuracy" | "data";
 const TABS: [Tab, string][] = [
@@ -20,6 +21,8 @@ export class ResultPanel {
   tab: Tab = "overview";
   private list: HTMLElement | null = null;
   private search: HTMLInputElement | null = null;
+  /** Рядок списку «Об'єкти» для кожного показаного об'єкта (для підсвічування з кадру). */
+  private rowByItem = new Map<unknown, HTMLElement>();
   /** Відкрита форма зміни часу й місця (і що в ній підсвітити першим). */
   private editing: "time" | "place" | null = null;
 
@@ -55,7 +58,7 @@ export class ResultPanel {
     if (!this.list) return;
     this.list.querySelectorAll(".obj.active").forEach((e) => e.classList.remove("active"));
     if (!t) return;
-    const row = Array.from(this.list.children).find((e) => (e as HTMLElement & { _item?: unknown })._item === t.item);
+    const row = this.rowByItem.get(t.item);
     row?.classList.add("active");
     row?.scrollIntoView({ block: "nearest" });
   }
@@ -129,14 +132,14 @@ export class ResultPanel {
       out.push(h("h4", {}, "Сузір'я в кадрі"),
         h("div.tags", {}, [...cons.entries()].sort((a, b) => b[1] - a[1]).map(([c, n]) =>
           r.constellations?.some((k) => k.id === c)
-            ? h("button.tag", { title: `${n} зір до ${num(6.5, 1)}m · показати лінії`, onclick: () => this.viewer.focusConstellation(c) }, CONSTELLATIONS[c] ?? c, h("i", {}, n))
-            : h("span.tag", { title: `${n} зір до ${num(6.5, 1)}m` }, CONSTELLATIONS[c] ?? c, h("i", {}, n)))));
+            ? h("button.tag", { title: `${n} зір до ${num(6.5, 1)}m · показати лінії`, onclick: () => this.viewer.focusConstellation(c) }, constellationName(c), h("i", {}, n))
+            : h("span.tag", { title: `${n} зір до ${num(6.5, 1)}m` }, constellationName(c), h("i", {}, n)))));
     }
 
     if (r.bodies.length) {
       out.push(h("h4", {}, "Сонячна система"),
         h("div.tags", {}, r.bodies.map((b) =>
-          h("button.tag.body-tag", { onclick: () => this.viewer.flyTo({ kind: "body", item: b }) }, `${BODY_UA[b.name]?.glyph ?? ""} ${BODY_UA[b.name]?.name ?? b.name}`))));
+          h("button.tag.body-tag", { onclick: () => this.viewer.flyTo({ kind: "body", item: b }) }, `${bodyGlyph(b.name)} ${bodyName(b.name)}`))));
     }
 
     const brightest = r.stars.filter((st) => st.proper_name).slice(0, 6);
@@ -188,6 +191,7 @@ export class ResultPanel {
       };
       const shown = targets.filter(match);
       count.textContent = q ? `Знайдено: ${shown.length}` : `${r.bodies.length ? `${r.bodies.length} тіл Сонячної системи, ` : ""}${r.stars.length} зір до 6,5m`;
+      this.rowByItem.clear();
       this.list!.replaceChildren(...shown.slice(0, 300).map((t) => this.objRow(t)));
     };
     this.search.addEventListener("input", fill);
@@ -204,14 +208,14 @@ export class ResultPanel {
     let sub: string;
     let right: string;
     if (t.kind === "body") {
-      glyph = h("span.glyph.body", {}, BODY_UA[t.item.name]?.glyph ?? "●");
+      glyph = h("span.glyph.body", {}, bodyGlyph(t.item.name));
       sub = t.item.nearest_detection ? `збіг з точкою: ${arc(t.item.nearest_detection.offset_arcsec)}` : "планета";
       right = t.item.mag != null ? `${num(t.item.mag, 1)}m` : "";
     } else {
       const st = t.item;
       const sz = Math.max(3, 10 - st.mag * 1.2);
       glyph = h("span.glyph", {}, s("svg", { viewBox: "-6 -6 12 12" }, s("circle", { r: (sz / 2).toFixed(1), class: st.detection ? "m" : "u" })));
-      sub = [st.proper_name ? st.designation : null, st.constellation ? CONSTELLATIONS[st.constellation] ?? st.constellation : null].filter(Boolean).join(" · ");
+      sub = starSubtitle(st);
       right = `${num(st.mag, 1)}m`;
     }
     const alt = t.item.alt_refracted_deg;
@@ -220,7 +224,7 @@ export class ResultPanel {
       h("div", {}, h("b", {}, targetName(t)), h("small", {}, sub)),
       h("div.r", {}, h("span", {}, right), alt != null ? h("small", {}, `${num(alt, 0)}°`) : null));
     li.addEventListener("keydown", (e) => e.key === "Enter" && this.viewer.flyTo(t));
-    (li as HTMLElement & { _item?: unknown })._item = t.item;
+    this.rowByItem.set(t.item, li);
     return li;
   }
 
@@ -253,7 +257,7 @@ export class ResultPanel {
         h("table.tbl", {},
           h("thead", {}, h("tr", {}, h("th", {}, "Тіло"), h("th", {}, "Відхилення"), h("th", {}, "px"))),
           h("tbody", {}, this.r.bodies.filter((b) => b.nearest_detection).map((b) =>
-            h("tr", {}, h("td", {}, BODY_UA[b.name]?.name ?? b.name), h("td", {}, arc(b.nearest_detection!.offset_arcsec)), h("td", {}, num(b.nearest_detection!.offset_px, 1)))))));
+            h("tr", {}, h("td", {}, bodyName(b.name)), h("td", {}, arc(b.nearest_detection!.offset_arcsec)), h("td", {}, num(b.nearest_detection!.offset_px, 1)))))));
     }
 
     out.push(h("h4", {}, "Розв'язання"), h("dl.kv", {},

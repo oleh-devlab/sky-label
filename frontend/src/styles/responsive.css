@@ -1,0 +1,33 @@
+/* Вузькі екрани й телефони. Порядок підключення в main.ts важливий: це один каскад. */
+
+/* ---------------------------------------------------------------- вузькі екрани */
+
+@media (max-width: 1100px) {
+  .result { grid-template-columns: minmax(0, 1fr) 300px; }
+}
+@media (max-width: 820px) {
+  body { overflow: auto; }
+  .layout { display: block; height: auto; }
+  /* Ліва панель — висувна поверх сторінки */
+  .sidebar {
+    position: fixed; z-index: 20; top: 56px; bottom: 0; left: 0; width: min(330px, 88vw);
+    padding: 12px 16px; background: #070b1c; transform: translateX(-105%); transition: transform 0.22s ease;
+  }
+  body:not(.side-collapsed) .sidebar { transform: none; box-shadow: 20px 0 60px rgba(0, 0, 0, 0.6); }
+  body.side-collapsed .sidebar > .card { display: flex; }
+  body.side-collapsed .rail { display: none; }
+  body:not(.side-collapsed) .scrim { display: block; position: fixed; inset: 56px 0 0; z-index: 19; background: rgba(2, 6, 23, 0.6); }
+  .jobs { min-height: 200px; }
+  .main { height: calc(100vh - 56px); height: calc(100dvh - 56px); min-height: 520px; }
+  .result { grid-template-columns: 1fr; grid-template-rows: minmax(360px, 64%) 1fr; }
+  body.panel-collapsed .result { grid-template-columns: 1fr; grid-template-rows: 1fr 0; }
+  .panel { border-left: none; border-top: 1px solid var(--line); }
+  .health { display: none; }
+  .pending { grid-template-columns: 1fr; padding: 16px; gap: 16px; align-content: start; overflow: auto; }
+  .popover { width: min(290px, calc(100% - 16px)); }
+  .readout { display: none; }
+  .compass > div { display: none; }
+  .compass { padding: 6px; }
+  .compass svg { width: 44px; height: 44px; }
+  .mag input { width: 70px; }
+}

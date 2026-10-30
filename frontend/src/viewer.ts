@@ -1,12 +1,12 @@
 // Переглядач кадру: прев'ю + SVG-накладка (зорі, планети, точки, сітка висоти/азимута).
 // Масштабування коліщатком і щипком, перетягування, підписи без накладань.
 
-import type { Body, Job, Result, Star } from "./api";
-import { BODY_UA, CONSTELLATIONS, arc, compass, dms, h, hms, icon, num, s } from "./util";
+import type { Job, Result } from "./api";
+import { targetCard } from "./cards";
+import { exportAnnotatedPng } from "./exportPng";
+import { TIER_ZOOM, bodyGlyph, bodyName, bodyRadius, constellationName, labelTier, starRadius, type Layer, type Target } from "./marks";
+import { arc, compass, dms, h, hms, icon, num, s } from "./util";
 import { altAz, makeWcs, type Wcs } from "./wcs";
-
-export type Layer = "stars" | "bodies" | "constellations" | "detections" | "grid" | "labels";
-export type Target = { kind: "star"; item: Star } | { kind: "body"; item: Body };
 
 const LAYER_UA: Record<Layer, [string, string]> = {
   stars: ["Зорі", "S"],
@@ -31,17 +31,8 @@ interface Marker {
   tier: number;
 }
 
-/** З якого наближення (відносно «весь кадр») показувати підписи кожного рівня. */
-const TIER_ZOOM = [0, 1.8, 3.5];
 /** Скільки кружечків зір прийнятно на весь кадр: за замовчуванням межа величини підбирається під це. */
 const DEFAULT_MAX_STARS = 250;
-
-function labelTier(st: Star): number {
-  if (st.proper_name) return 0;
-  if (/^(HIP|HR) /.test(st.name)) return 2;
-  if (/^\d/.test(st.name)) return 1;
-  return 0;
-}
 
 /** Що зберегти, перемальовуючи той самий кадр (напр. після зміни часу чи місця). */
 export interface ViewState {
@@ -60,12 +51,6 @@ function textWidth(t: string) {
   return measureCtx.measureText(t).width;
 }
 
-export function targetName(t: Target): string {
-  return t.kind === "body" ? BODY_UA[t.item.name]?.name ?? t.item.name : t.item.name;
-}
-
-const starRadius = (mag: number) => Math.max(3, 9 - mag * 1.05);
-
 export class Viewer {
   readonly el: HTMLElement;
   private stage: HTMLElement;
@@ -73,6 +58,8 @@ export class Viewer {
   private svg: SVGSVGElement;
   private gridG: SVGGElement;
   private gridLabels: SVGGElement;
+  /** Підписи ліній сітки: ставляться на першу видиму точку своєї лінії. */
+  private gridLabelEls: { el: SVGTextElement; lines: [number, number][][] }[] = [];
   private constG: SVGGElement;
   private constLabels: { el: SVGTextElement; x: number; y: number; w: number }[] = [];
   private markersG: SVGGElement;
@@ -263,9 +250,9 @@ export class Viewer {
         this.gridG.append(s("path", { d, class: cls }));
       }
       const text = g.kind === "alt" ? (g.value === 0 ? "горизонт" : `${g.value}°`) : CARD[g.value] ?? `${g.value}°`;
-      const lbl = s("text", { class: `glabel ${cls}` }, text);
-      (lbl as unknown as { _lines: [number, number][][] })._lines = g.lines;
-      this.gridLabels.append(lbl);
+      const el = s("text", { class: `glabel ${cls}` }, text);
+      this.gridLabelEls.push({ el, lines: g.lines });
+      this.gridLabels.append(el);
     }
   }
 
@@ -273,7 +260,7 @@ export class Viewer {
     for (const c of this.result.constellations ?? []) {
       const d = c.lines.map((line) => "M" + line.map(([x, y]) => `${x} ${y}`).join("L")).join("");
       this.constG.append(s("path", { d, "data-con": c.id }));
-      const name = CONSTELLATIONS[c.id] ?? c.id;
+      const name = constellationName(c.id);
       const el = s("text", { "text-anchor": "middle", "data-con": c.id }, name);
       labelsG.append(el);
       this.constLabels.push({ el, x: c.label[0], y: c.label[1], w: textWidth(name.toUpperCase()) + name.length * 2 + 10 });
@@ -327,14 +314,13 @@ export class Viewer {
 
     // Планети, Місяць, Сонце: над зорями
     for (const b of r.bodies) {
-      const info = BODY_UA[b.name] ?? { name: b.name, glyph: "●" };
-      const rad = b.name === "Moon" || b.name === "Sun" ? 16 : 11;
+      const rad = bodyRadius(b.name);
       const nd = b.nearest_detection;
-      const label = s("text", { x: (rad + 5).toFixed(1), y: "5" }, info.name);
+      const label = s("text", { x: (rad + 5).toFixed(1), y: "5" }, bodyName(b.name));
       const g = s("g", { class: `body body-${b.name.toLowerCase()}` },
         nd ? s("line", { class: "offset", x1: "0", y1: "0", "data-dx": nd.x - b.x, "data-dy": nd.y - b.y }) : null,
         s("circle", { r: String(rad) }),
-        s("text", { class: "glyph", y: "5", "text-anchor": "middle" }, info.glyph),
+        s("text", { class: "glyph", y: "5", "text-anchor": "middle" }, bodyGlyph(b.name)),
         label);
       add({ target: { kind: "body", item: b }, x: b.x, y: b.y, g, label, r: rad, priority: -100 + (b.mag ?? 0), mag: -99, tier: 0 });
     }
@@ -505,8 +491,7 @@ export class Viewer {
   private renderGridLabels(cw: number, ch: number) {
     if (!this.layers.grid) return;
     const { sc, tx, ty } = this;
-    for (const lbl of Array.from(this.gridLabels.children) as SVGTextElement[]) {
-      const lines = (lbl as unknown as { _lines: [number, number][][] })._lines;
+    for (const { el: lbl, lines } of this.gridLabelEls) {
       let pos: [number, number] | null = null;
       // Перша точка лінії, що лежить у видимій частині, з відступом від країв
       outer: for (const line of lines)
@@ -571,37 +556,7 @@ export class Viewer {
   }
 
   private popoverContent(t: Target): Node[] {
-    const rows: [string, string | Node][] = [];
-    const title: Node[] = [];
-    if (t.kind === "star") {
-      const st = t.item;
-      title.push(h("h3", {}, st.name), h("p.sub", {}, [st.proper_name && st.designation ? st.designation : null, st.constellation ? CONSTELLATIONS[st.constellation] ?? st.constellation : null].filter(Boolean).join(" · ")));
-      rows.push(["Зоряна величина", `${num(st.mag, 2)}m`]);
-      rows.push(["α / δ (J2000)", `${hms(st.ra_deg)}  ${dms(st.dec_deg)}`]);
-      if (st.alt_refracted_deg != null) rows.push(["Висота / азимут", `${num(st.alt_refracted_deg, 2)}° · ${num(st.az_deg!, 1)}° ${compass(st.az_deg!)}`]);
-      rows.push(["На кадрі", !st.detection ? h("span.muted", {}, "не знайдена серед точок")
-        : st.detection.in_fit === false
-          ? h("span", {}, h("span.ok", {}, `знайдена, відхилення ${arc(st.detection.offset_arcsec)}`), h("br"),
-            h("small.muted", {}, "у підгонку не ввійшла: пересвічена або тісна подвійна"))
-          : h("span.ok", {}, `знайдена, відхилення ${arc(st.detection.offset_arcsec)}`)]);
-      const ids = [st.hip ? `HIP ${st.hip}` : null, st.hr ? `HR ${st.hr}` : null].filter(Boolean).join(" · ");
-      if (ids) rows.push(["Каталоги", ids]);
-    } else {
-      const b = t.item;
-      const info = BODY_UA[b.name] ?? { name: b.name, glyph: "" };
-      title.push(h("h3", {}, `${info.glyph} ${info.name}`), h("p.sub", {}, "положення за ефемеридою JPL DE421"));
-      if (b.mag != null) rows.push(["Зоряна величина", `${num(b.mag, 2)}m`]);
-      rows.push(["Відстань", b.distance_au < 0.01 ? `${num(b.distance_au * 149597870.7, 0)} км` : `${num(b.distance_au, 3)} а. о.`]);
-      rows.push(["α / δ", `${hms(b.ra_deg)}  ${dms(b.dec_deg)}`]);
-      rows.push(["Висота / азимут", `${num(b.alt_refracted_deg, 2)}° · ${num(b.az_deg, 1)}° ${compass(b.az_deg)}`]);
-      const nd = b.nearest_detection;
-      rows.push(["Перевірка", nd ? h("span.ok", {}, `найближча точка за ${arc(nd.offset_arcsec)} (${num(nd.offset_px, 1)} px)`) : h("span.muted", {}, "яскравої точки поруч немає")]);
-    }
-    return [
-      h("button.close", { "aria-label": "Закрити", onclick: () => this.select(null) }, "×"),
-      ...title,
-      h("dl", {}, rows.flatMap(([k, v]) => [h("dt", {}, k), h("dd", {}, v)])),
-    ];
+    return [h("button.close", { "aria-label": "Закрити", onclick: () => this.select(null) }, "×"), ...targetCard(t)];
   }
 
   // ------------------------------------------------------------ миша, дотики
@@ -725,93 +680,7 @@ export class Viewer {
   // ------------------------------------------------------------ експорт
 
   /** Кадр у повній роздільності з накладкою, як її зараз видно (шари, межа величини). */
-  async exportPng(): Promise<Blob> {
-    await this.img.decode().catch(() => {});
-    const c = document.createElement("canvas");
-    c.width = this.W;
-    c.height = this.H;
-    const ctx = c.getContext("2d")!;
-    ctx.drawImage(this.img, 0, 0, this.W, this.H);
-    const u = Math.max(1, Math.max(this.W, this.H) / 1600); // одиниця товщини/шрифту
-    ctx.lineJoin = "round";
-    const hz = this.result.horizontal;
-    if (this.layers.grid && hz) {
-      for (const g of hz.grid) {
-        const horizon = g.kind === "alt" && g.value === 0;
-        ctx.strokeStyle = horizon ? "rgba(251,191,36,.9)" : g.kind === "alt" ? "rgba(125,211,252,.45)" : "rgba(196,181,253,.4)";
-        ctx.lineWidth = (horizon ? 2.2 : 1) * u;
-        ctx.setLineDash(horizon ? [] : [6 * u, 5 * u]);
-        for (const line of g.lines) {
-          ctx.beginPath();
-          line.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
-          ctx.stroke();
-        }
-      }
-      ctx.setLineDash([]);
-    }
-    const cons = this.layers.constellations ? this.result.constellations ?? [] : [];
-    ctx.strokeStyle = "rgba(147,197,253,.55)";
-    ctx.lineWidth = 1.6 * u;
-    for (const c of cons)
-      for (const line of c.lines) {
-        ctx.beginPath();
-        line.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
-        ctx.stroke();
-      }
-    // Підписи без накладань, як і на екрані: першими йдуть найважливіші
-    const placed: number[][] = [];
-    const label = (t: string, x: number, y: number, color: string, force = false, center = false) => {
-      ctx.font = `600 ${13 * u}px system-ui, sans-serif`;
-      const w = ctx.measureText(t).width;
-      if (center) x -= w / 2;
-      const box = [x, y - 12 * u, x + w, y + 3 * u];
-      if (!force && placed.some((p) => box[0] < p[2] && box[2] > p[0] && box[1] < p[3] && box[3] > p[1])) return;
-      placed.push(box);
-      ctx.lineWidth = 3.5 * u;
-      ctx.strokeStyle = "rgba(2,6,23,.85)";
-      ctx.strokeText(t, x, y);
-      ctx.fillStyle = color;
-      ctx.fillText(t, x, y);
-    };
-    if (this.layers.labels)
-      for (const c of cons) label((CONSTELLATIONS[c.id] ?? c.id).toUpperCase(), c.label[0], c.label[1], "rgba(191,219,254,.8)", false, true);
-    if (this.layers.detections) {
-      ctx.strokeStyle = "rgba(94,234,212,.6)";
-      ctx.lineWidth = u;
-      for (const [x, y] of this.result.detections) {
-        ctx.beginPath();
-        ctx.arc(x, y, 4 * u, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-    }
-    if (this.layers.bodies) {
-      for (const b of this.result.bodies) {
-        const r = (b.name === "Moon" || b.name === "Sun" ? 16 : 11) * u;
-        ctx.strokeStyle = "#fbbf24";
-        ctx.lineWidth = 2 * u;
-        ctx.beginPath();
-        ctx.arc(b.x, b.y, r, 0, Math.PI * 2);
-        ctx.stroke();
-        if (this.layers.labels) label(BODY_UA[b.name]?.name ?? b.name, b.x + r + 5 * u, b.y + 5 * u, "#fde68a");
-      }
-    }
-    if (this.layers.stars) {
-      for (const st of this.result.stars) {
-        if (st.mag > this.magLimit) continue;
-        const r = starRadius(st.mag) * u;
-        ctx.strokeStyle = st.detection ? "rgba(186,230,253,.95)" : "rgba(186,230,253,.5)";
-        ctx.lineWidth = 1.4 * u;
-        ctx.beginPath();
-        ctx.arc(st.x, st.y, r, 0, Math.PI * 2);
-        ctx.stroke();
-        if (this.layers.labels && (st.proper_name || st.mag < 4)) label(st.name, st.x + r + 4 * u, st.y + 4 * u, "#e0f2fe");
-      }
-    }
-    // Підпис унизу
-    const obs = this.result.observation;
-    const foot = ["astro-search", obs.time_utc ? new Date(obs.time_utc).toISOString().replace(".000Z", " UTC").replace("T", " ") : null,
-      `${num(obs.location.lat, 4)}°, ${num(obs.location.lon, 4)}°`].filter(Boolean).join("  ·  ");
-    label(foot, 12 * u, this.H - 12 * u, "rgba(226,232,240,.9)", true);
-    return new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error("toBlob"))), "image/png"));
+  exportPng(): Promise<Blob> {
+    return exportAnnotatedPng(this.img, this.result, { layers: this.layers, magLimit: this.magLimit });
   }
 }
