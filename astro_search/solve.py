@@ -283,6 +283,20 @@ class Solution:
 
 
 REFINE_ITERATIONS = 5
+CLIP_ROUNDS = 5
+# Відсікання викидів і радіус пошуку пар — у σ, оціненій за медіаною (див. _robust_sigma)
+CLIP_SIGMA = 4.0
+RADIUS_SIGMA = 6.0
+
+
+def _robust_sigma(res: np.ndarray) -> float:
+    """σ одного напрямку за медіаною відстаней.
+
+    Відстань до пари за гаусового шуму має розподіл Релея, медіана якого 1,1774σ.
+    На відміну від rms, медіану хибні пари майже не зсувають: інакше вони роздувають
+    поріг і радіус пошуку, ті приводять ще більше хибних пар, і уточнення розходиться.
+    """
+    return float(np.nanmedian(res)) / 1.1774
 
 
 def refine(init: InitialSolution, dets: np.ndarray, cat: StarCatalog, epoch_year: float,
@@ -292,7 +306,9 @@ def refine(init: InitialSolution, dets: np.ndarray, cat: StarCatalog, epoch_year
     ra_all, dec_all = cat.positions_at(epoch_year, bright)
     det_xy = dets[:, :2]
     wcs = init.wcs
-    radius = max(8.0, 0.006 * math.hypot(width, height))
+    # Радіус пошуку пар лише звужується: початкове наближення не гірше за цей допуск
+    radius0 = radius = max(8.0, 0.006 * math.hypot(width, height))
+    # Поки пари ненадійні — найпростіша модель, як і в початковому наближенні
     model: distortion.Model = (1, ())
     scores: dict = {}
     for it in range(REFINE_ITERATIONS):
@@ -303,19 +319,18 @@ def refine(init: InitialSolution, dets: np.ndarray, cat: StarCatalog, epoch_year
         ci = sel[ci_local]
         c0 = _frame_center(wcs, width, height)
         ra0, dec0 = float(c0.ra.deg), float(c0.dec.deg)
-        if it == 0:
-            # Поки пари ненадійні — модель за кількістю зір, як і раніше
-            n = len(ci)
-            model = (3, ()) if n >= 60 else (2, ()) if n >= 20 else (1, ())
-        for clip in range(3):
+
+        def fit_and_res(model):
             pf = distortion.fit(det_xy[dj, 0], det_xy[dj, 1], ra_all[ci], dec_all[ci],
                                 width, height, ra0, dec0, model)
-            res = distortion.residuals_px(pf, det_xy[dj, 0], det_xy[dj, 1], ra_all[ci], dec_all[ci])
+            return pf, distortion.residuals_px(pf, det_xy[dj, 0], det_xy[dj, 1], ra_all[ci], dec_all[ci])
+
+        for clip in range(CLIP_ROUNDS):
+            pf, res = fit_and_res(model)
             if not np.isfinite(res).any():
                 return None
-            rms = float(np.sqrt(np.nanmean(res ** 2)))
-            keep = np.isfinite(res) & (res <= max(3 * rms, 1.0))
-            if keep.all() or keep.sum() < 6 or clip == 2:
+            keep = np.isfinite(res) & (res <= max(CLIP_SIGMA * _robust_sigma(res), 1.0))
+            if keep.all() or keep.sum() < 6 or clip == CLIP_ROUNDS - 1:
                 break
             # відкинути викиди (хибні пари) і підігнати ще раз
             ci, dj = ci[keep], dj[keep]
@@ -323,12 +338,9 @@ def refine(init: InitialSolution, dets: np.ndarray, cat: StarCatalog, epoch_year
             # Пари вже надійні: модель дисторсії обирає перехресна перевірка
             model, scores = distortion.choose(det_xy[dj, 0], det_xy[dj, 1], ra_all[ci], dec_all[ci],
                                               width, height, ra0, dec0)
-            pf = distortion.fit(det_xy[dj, 0], det_xy[dj, 1], ra_all[ci], dec_all[ci],
-                                width, height, ra0, dec0, model)
-            res = distortion.residuals_px(pf, det_xy[dj, 0], det_xy[dj, 1], ra_all[ci], dec_all[ci])
-            rms = float(np.sqrt(np.nanmean(res ** 2)))
+            pf, res = fit_and_res(model)
         wcs = pf.to_wcs()
-        radius = max(3.0, 5 * rms)
+        radius = min(radius0, max(3.0, RADIUS_SIGMA * _robust_sigma(res)))
 
     det_sky = wcs.pixel_to_world(det_xy[dj, 0], det_xy[dj, 1])
     sep = det_sky.separation(SkyCoord(ra_all[ci] * u.deg, dec_all[ci] * u.deg)).arcsec
