@@ -95,7 +95,9 @@ export class ResultPanel {
     if (cons.size) {
       out.push(h("h4", {}, "Сузір'я в кадрі"),
         h("div.tags", {}, [...cons.entries()].sort((a, b) => b[1] - a[1]).map(([c, n]) =>
-          h("span.tag", { title: `${n} зір до ${num(6.5, 1)}m` }, CONSTELLATIONS[c] ?? c, h("i", {}, n)))));
+          r.constellations?.some((k) => k.id === c)
+            ? h("button.tag", { title: `${n} зір до ${num(6.5, 1)}m · показати лінії`, onclick: () => this.viewer.focusConstellation(c) }, CONSTELLATIONS[c] ?? c, h("i", {}, n))
+            : h("span.tag", { title: `${n} зір до ${num(6.5, 1)}m` }, CONSTELLATIONS[c] ?? c, h("i", {}, n)))));
     }
 
     if (r.bodies.length) {

@@ -319,7 +319,7 @@ try {
 const help = $<HTMLDialogElement>("#help");
 $("#btn-help").addEventListener("click", () => help.showModal());
 
-const LAYER_KEYS: Record<string, Layer> = { s: "stars", p: "bodies", g: "grid", d: "detections", l: "labels" };
+const LAYER_KEYS: Record<string, Layer> = { s: "stars", p: "bodies", c: "constellations", g: "grid", d: "detections", l: "labels" };
 window.addEventListener("keydown", (e) => {
   const t = e.target as HTMLElement;
   if (e.ctrlKey || e.metaKey || e.altKey || t.matches("input, select, textarea") || help.open) return;

@@ -86,6 +86,7 @@ def process(image_path: Path, preview_path: Path, cfg: Config, ov: Overrides | N
         "stars": [],
         "bodies": [],
         "horizontal": None,
+        "constellations": [],
         "detections": [[round(float(x), 2), round(float(y), 2), float(f)] for x, y, f, _ in dets],
         "warnings": warnings,
         "timings": timings,
@@ -145,6 +146,14 @@ def process(image_path: Path, preview_path: Path, cfg: Config, ov: Overrides | N
         stars.append(item)
     stars.sort(key=lambda s: s["mag"])
     result["stars"] = stars
+
+    # --- лінії сузір'їв (від часу не залежать)
+    lines = catalog_mod.load_lines(cfg.catalog_dir)
+    if lines is not None:
+        t0 = time.perf_counter()
+        ra_all, dec_all = cat.positions_at(epoch)
+        result["constellations"] = sky.constellation_lines(sol.wcs, im.width, im.height, ra_all, dec_all, lines)
+        timings["constellations_s"] = time.perf_counter() - t0
 
     # --- планети, Місяць, горизонт
     if when is not None:

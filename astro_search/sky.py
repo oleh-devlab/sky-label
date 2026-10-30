@@ -207,3 +207,52 @@ def horizontal(wcs: WCS, width: int, height: int, when: datetime, lat: float, lo
         "zenith_direction_deg": None if zenith_angle is None else round(zenith_angle, 2),
         "grid": grid,
     }
+
+
+def constellation_lines(wcs: WCS, width: int, height: int, ra: np.ndarray, dec: np.ndarray,
+                        lines) -> list[dict]:
+    """Лінії сузір'їв у піксельних координатах, обрізані краями кадру.
+
+    ra, dec — координати всіх зір каталогу на епоху кадру; lines — catalog.ConstellationLines.
+    Кожен відрізок іде дугою великого кола між двома зорями. У проєкції TAN така
+    дуга — пряма, але дисторсія SIP її вигинає, тож дуга береться з кроком ~1°.
+    Підпис сузір'я ставиться в середину його зір, що потрапили в кадр.
+    """
+    a_u = _unit_vec(ra[lines.a], dec[lines.a])
+    b_u = _unit_vec(ra[lines.b], dec[lines.b])
+    omega = np.arccos(np.clip(np.einsum("ij,ij->i", a_u, b_u), -1, 1))
+    n = 24
+    t = np.linspace(0, 1, n)[None, :, None]
+    sin_o = np.sin(omega)[:, None, None]
+    # Сферична інтерполяція (slerp) між кінцями кожного відрізка
+    with np.errstate(invalid="ignore", divide="ignore"):
+        pts = (np.sin((1 - t) * omega[:, None, None]) * a_u[:, None, :]
+               + np.sin(t * omega[:, None, None]) * b_u[:, None, :]) / sin_o
+    pts = pts.reshape(-1, 3)
+    p_ra = np.degrees(np.arctan2(pts[:, 1], pts[:, 0])) % 360
+    p_dec = np.degrees(np.arcsin(np.clip(pts[:, 2], -1, 1)))
+    x, y = _project(wcs, width, height, p_ra, p_dec)
+    x, y = x.reshape(-1, n), y.reshape(-1, n)
+
+    out: dict[str, dict] = {}
+    for k, con in enumerate(lines.con.tolist()):
+        segs = _polylines(x[k], y[k], width, height)
+        if not segs:
+            continue
+        item = out.setdefault(con, {"id": con, "lines": [], "stars": []})
+        item["lines"] += segs
+        for end in (0, n - 1):
+            if _in_frame(x[k, end], y[k, end], width, height):
+                item["stars"].append((float(x[k, end]), float(y[k, end])))
+    result = []
+    for item in out.values():
+        pts_xy = item.pop("stars") or [p for seg in item["lines"] for p in seg]
+        cx, cy = np.mean(pts_xy, axis=0)
+        item["label"] = [round(float(cx), 1), round(float(cy), 1)]
+        result.append(item)
+    return result
+
+
+def _unit_vec(ra_deg, dec_deg) -> np.ndarray:
+    ra, dec = np.radians(ra_deg), np.radians(dec_deg)
+    return np.column_stack([np.cos(dec) * np.cos(ra), np.cos(dec) * np.sin(ra), np.sin(dec)])

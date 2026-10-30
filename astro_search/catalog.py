@@ -21,6 +21,7 @@ GREEK = {
 SUPERSCRIPT = str.maketrans("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹")
 
 STARS_FILE = "stars.npz"
+LINES_FILE = "constellations.npz"
 J2000_YEAR = 2000.0
 
 
@@ -89,3 +90,21 @@ class StarCatalog:
 def load(catalog_dir: Path) -> StarCatalog:
     with np.load(Path(catalog_dir) / STARS_FILE, allow_pickle=False) as z:
         return StarCatalog(**{k: z[k] for k in StarCatalog.__dataclass_fields__})
+
+
+@dataclass
+class ConstellationLines:
+    """Відрізки ліній сузір'їв: con[k] — сузір'я, a[k]–b[k] — індекси зір у StarCatalog."""
+    con: np.ndarray
+    a: np.ndarray
+    b: np.ndarray
+
+
+@lru_cache(maxsize=2)
+def load_lines(catalog_dir: Path) -> ConstellationLines | None:
+    """Лінії сузір'їв або None, якщо каталог підготовлено старою версією скрипта."""
+    f = Path(catalog_dir) / LINES_FILE
+    if not f.is_file():
+        return None
+    with np.load(f, allow_pickle=False) as z:
+        return ConstellationLines(con=z["con"], a=z["a"], b=z["b"])

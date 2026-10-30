@@ -332,6 +332,14 @@ input:focus, select:focus { outline: none; border-color: var(--accent); box-shad
 .glabel.horizon { fill: var(--gold-soft); font-weight: 600; }
 .hide-grid .grid, .hide-grid .grid-labels { display: none; }
 
+.const path { fill: none; vector-effect: non-scaling-stroke; stroke: rgba(147, 197, 253, 0.7); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.const path.hl { animation: const-hl 2.4s ease-out; }
+@keyframes const-hl { 0%, 40% { stroke: #fde68a; stroke-width: 3; filter: drop-shadow(0 0 4px rgba(253, 230, 138, 0.9)); } }
+.const-labels text { fill: rgba(191, 219, 254, 0.9); font-size: 11px; font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase; }
+.const-labels text.hl { animation: const-hl-t 2.4s ease-out; }
+@keyframes const-hl-t { 0%, 40% { fill: #fde68a; } }
+.hide-constellations .const, .hide-constellations .const-labels { display: none; }
+.layer-constellations .swatch { color: #93c5fd; border-radius: 2px; transform: rotate(45deg); }
 .det circle { fill: none; stroke: rgba(94, 234, 212, 0.65); stroke-width: 1; }
 .hide-detections .det { visibility: hidden; }
 

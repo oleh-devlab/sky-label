@@ -110,6 +110,8 @@ export interface Result {
     zenith_direction_deg: number | null;
     grid: GridLine[];
   } | null;
+  /** Лінії сузір'їв у пікселях кадру; у результатах старих версій поля немає. */
+  constellations?: { id: string; lines: [number, number][][]; label: [number, number] }[];
   detections: [number, number, number][];
   warnings: string[];
   timings: Record<string, number>;

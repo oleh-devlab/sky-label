@@ -5,12 +5,13 @@ import type { Body, Job, Result, Star } from "./api";
 import { BODY_UA, CONSTELLATIONS, arc, compass, dms, h, hms, icon, num, s } from "./util";
 import { altAz, makeWcs, type Wcs } from "./wcs";
 
-export type Layer = "stars" | "bodies" | "detections" | "grid" | "labels";
+export type Layer = "stars" | "bodies" | "constellations" | "detections" | "grid" | "labels";
 export type Target = { kind: "star"; item: Star } | { kind: "body"; item: Body };
 
 const LAYER_UA: Record<Layer, [string, string]> = {
   stars: ["Зорі", "S"],
   bodies: ["Планети", "P"],
+  constellations: ["Сузір'я", "C"],
   grid: ["Сітка", "G"],
   detections: ["Точки", "D"],
   labels: ["Підписи", "L"],
@@ -49,6 +50,8 @@ export class Viewer {
   private svg: SVGSVGElement;
   private gridG: SVGGElement;
   private gridLabels: SVGGElement;
+  private constG: SVGGElement;
+  private constLabels: { el: SVGTextElement; x: number; y: number; w: number }[] = [];
   private markersG: SVGGElement;
   private popover: HTMLElement;
   private readout: HTMLElement;
@@ -64,7 +67,7 @@ export class Viewer {
   private raf = 0;
   private anim = 0;
   private selected: Marker | null = null;
-  private layers: Record<Layer, boolean> = { stars: true, bodies: true, grid: true, detections: false, labels: true };
+  private layers: Record<Layer, boolean> = { stars: true, bodies: true, constellations: true, grid: true, detections: false, labels: true };
   magLimit = 6.5;
   onSelect: (t: Target | null) => void = () => {};
   private ro: ResizeObserver;
@@ -77,6 +80,7 @@ export class Viewer {
     this.H = result.image.height;
     this.wcs = result.solution ? makeWcs(result.solution.wcs_header) : null;
     if (!result.horizontal) this.layers.grid = false;
+    if (!result.constellations?.length) this.layers.constellations = false;
     if (!result.solved) this.layers.detections = true;
 
     this.img = h("img.photo", { src: job.links.preview, alt: job.filename, draggable: "false" });
@@ -84,8 +88,10 @@ export class Viewer {
     this.img.style.height = `${this.H}px`;
     this.gridG = s("g", { class: "grid" });
     this.gridLabels = s("g", { class: "grid-labels" });
+    this.constG = s("g", { class: "const" });
+    const constLabelsG = s("g", { class: "const-labels" });
     this.markersG = s("g", { class: "markers" });
-    this.svg = s("svg", { class: "overlay" }, this.gridG, this.gridLabels, this.markersG);
+    this.svg = s("svg", { class: "overlay" }, this.gridG, this.constG, this.gridLabels, constLabelsG, this.markersG);
     this.popover = h("div.popover", { hidden: true });
     this.readout = h("div.readout");
     this.scaleBar = h("div.scalebar");
@@ -94,6 +100,7 @@ export class Viewer {
     this.el = h("div.viewer", {}, this.toolbar(), this.stage, this.compassWidget(), this.scaleBar, this.readout);
 
     this.buildGrid();
+    this.buildConstellations(constLabelsG);
     this.buildMarkers();
     this.bindPointer();
     this.applyLayerClasses();
@@ -118,7 +125,7 @@ export class Viewer {
   private toolbar() {
     const chips = (Object.keys(LAYER_UA) as Layer[]).map((l) => {
       const [name, key] = LAYER_UA[l];
-      const disabled = (l === "grid" && !this.result.horizontal) || (l === "bodies" && !this.result.bodies.length) || (l === "stars" && !this.result.stars.length);
+      const disabled = (l === "grid" && !this.result.horizontal) || (l === "constellations" && !this.result.constellations?.length) || (l === "bodies" && !this.result.bodies.length) || (l === "stars" && !this.result.stars.length);
       return h(`button.chip.layer-${l}`, {
         "data-layer": l,
         "aria-pressed": String(this.layers[l]),
@@ -197,6 +204,37 @@ export class Viewer {
       (lbl as unknown as { _lines: [number, number][][] })._lines = g.lines;
       this.gridLabels.append(lbl);
     }
+  }
+
+  private buildConstellations(labelsG: SVGGElement) {
+    for (const c of this.result.constellations ?? []) {
+      const d = c.lines.map((line) => "M" + line.map(([x, y]) => `${x} ${y}`).join("L")).join("");
+      this.constG.append(s("path", { d, "data-con": c.id }));
+      const name = CONSTELLATIONS[c.id] ?? c.id;
+      const el = s("text", { "text-anchor": "middle", "data-con": c.id }, name);
+      labelsG.append(el);
+      this.constLabels.push({ el, x: c.label[0], y: c.label[1], w: textWidth(name.toUpperCase()) + name.length * 2 + 10 });
+    }
+  }
+
+  /** Показати сузір'я: увімкнути шар, підсвітити лінії й наблизитися до підпису. */
+  focusConstellation(id: string) {
+    const c = this.result.constellations?.find((k) => k.id === id);
+    if (!c) return;
+    if (!this.layers.constellations) this.toggle("constellations", true);
+    this.svg.querySelectorAll(`[data-con="${id}"]`).forEach((e) => {
+      e.classList.remove("hl");
+      void (e as SVGElement).getBoundingClientRect(); // перезапустити анімацію
+      e.classList.add("hl");
+    });
+    const pts = c.lines.flat();
+    const xs = pts.map((p) => p[0]);
+    const ys = pts.map((p) => p[1]);
+    const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+    const { clientWidth: cw, clientHeight: ch } = this.stage;
+    const top = this.topInset();
+    const sc = this.clampScale(Math.min(cw / ((x1 - x0) * 1.3 || 1), (ch - top) / ((y1 - y0) * 1.3 || 1), this.fitScale * 4));
+    this.animateTo(sc, cw / 2 - ((x0 + x1) / 2) * sc, top + (ch - top) / 2 - ((y0 + y1) / 2) * sc, true);
   }
 
   private buildMarkers() {
@@ -327,6 +365,7 @@ export class Viewer {
     this.img.style.imageRendering = sc > 2 ? "pixelated" : "";
     this.svg.setAttribute("viewBox", `0 0 ${cw} ${ch}`);
     this.gridG.setAttribute("transform", `matrix(${sc} 0 0 ${sc} ${tx} ${ty})`);
+    this.constG.setAttribute("transform", `matrix(${sc} 0 0 ${sc} ${tx} ${ty})`);
 
     // Маркери: позиції в екранних координатах, підписи — жадібно без накладань
     const placed: number[][] = [];
@@ -349,6 +388,34 @@ export class Viewer {
         }
       }
     }
+    // Порядок: підписи планет, назви сузір'їв, потім кола маркерів (щоб їх не затуляли
+    // підписи зір) і нарешті підписи зір. Назви сузір'їв перевіряються лише з підписами планет.
+    const constOn = this.layers.constellations && this.layers.labels;
+    const bodiesFirst = visible.filter((m) => m.label && m.target?.kind === "body");
+    const placeLabel = (m: Marker) => {
+      const layerOn = m.target?.kind === "star" ? this.layers.stars : this.layers.bodies;
+      let show = this.layers.labels && layerOn;
+      if (show) {
+        const x = tx + m.x * sc + m.r + 3;
+        const y = ty + m.y * sc;
+        const box = [x, y - 8, x + m.labelW, y + 8];
+        show = m === this.selected || !overlaps(box);
+        if (show) placed.push(box);
+      }
+      m.label!.style.display = show ? "" : "none";
+    };
+    bodiesFirst.forEach(placeLabel);
+    for (const c of this.constLabels) {
+      const x = tx + c.x * sc;
+      const y = ty + c.y * sc;
+      const box = [x - c.w / 2, y - 9, x + c.w / 2, y + 7];
+      const show = constOn && x > 0 && y > 0 && x < cw && y < ch && !overlaps(box);
+      if (show) {
+        placed.push(box);
+        c.el.setAttribute("transform", `translate(${x.toFixed(1)} ${y.toFixed(1)})`);
+      }
+      c.el.style.display = show ? "" : "none";
+    }
     if (this.layers.labels) {
       // Спершу обведення маркерів, щоб підписи не затуляли самі об'єкти
       for (const m of visible) {
@@ -362,19 +429,8 @@ export class Viewer {
         }
       }
     }
-    const withLabels = visible.filter((m) => m.label).sort((a, b) => a.priority - b.priority);
-    for (const m of withLabels) {
-      const layerOn = m.target?.kind === "star" ? this.layers.stars : this.layers.bodies;
-      let show = this.layers.labels && layerOn;
-      if (show) {
-        const x = tx + m.x * sc + m.r + 3;
-        const y = ty + m.y * sc;
-        const box = [x, y - 8, x + m.labelW, y + 8];
-        show = m === this.selected || !overlaps(box);
-        if (show) placed.push(box);
-      }
-      m.label!.style.display = show ? "" : "none";
-    }
+    const withLabels = visible.filter((m) => m.label && m.target?.kind !== "body").sort((a, b) => a.priority - b.priority);
+    withLabels.forEach(placeLabel);
 
     this.renderGridLabels(cw, ch);
     this.renderScaleBar();
@@ -624,11 +680,22 @@ export class Viewer {
       }
       ctx.setLineDash([]);
     }
+    const cons = this.layers.constellations ? this.result.constellations ?? [] : [];
+    ctx.strokeStyle = "rgba(147,197,253,.55)";
+    ctx.lineWidth = 1.6 * u;
+    for (const c of cons)
+      for (const line of c.lines) {
+        ctx.beginPath();
+        line.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+        ctx.stroke();
+      }
     // Підписи без накладань, як і на екрані: першими йдуть найважливіші
     const placed: number[][] = [];
-    const label = (t: string, x: number, y: number, color: string, force = false) => {
+    const label = (t: string, x: number, y: number, color: string, force = false, center = false) => {
       ctx.font = `600 ${13 * u}px system-ui, sans-serif`;
-      const box = [x, y - 12 * u, x + ctx.measureText(t).width, y + 3 * u];
+      const w = ctx.measureText(t).width;
+      if (center) x -= w / 2;
+      const box = [x, y - 12 * u, x + w, y + 3 * u];
       if (!force && placed.some((p) => box[0] < p[2] && box[2] > p[0] && box[1] < p[3] && box[3] > p[1])) return;
       placed.push(box);
       ctx.lineWidth = 3.5 * u;
@@ -637,6 +704,8 @@ export class Viewer {
       ctx.fillStyle = color;
       ctx.fillText(t, x, y);
     };
+    if (this.layers.labels)
+      for (const c of cons) label((CONSTELLATIONS[c.id] ?? c.id).toUpperCase(), c.label[0], c.label[1], "rgba(191,219,254,.8)", false, true);
     if (this.layers.detections) {
       ctx.strokeStyle = "rgba(94,234,212,.6)";
       ctx.lineWidth = u;
